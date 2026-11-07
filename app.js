@@ -66,6 +66,7 @@ function estadoInicial() {
       msgLembrete: MSG_LEMBRETE,
       msgAtraso: MSG_ATRASO,
       tetoMei: 81000,
+      diasSumido: 60,
       ultimaCompGerada: null,
     },
     ultimoBackup: null,
@@ -131,6 +132,27 @@ function mensalidadesDoAluno(id) {
 
 function atrasadasDoAluno(id) {
   return E.mensalidades.filter((m) => m.alunoId === id && situacao(m) === 'atrasada').sort((x, y) => x.comp.localeCompare(y.comp));
+}
+
+// ---------- Sumidos (ativos há muito tempo sem pagar) ----------
+function ultimoPagamento(id) {
+  return E.mensalidades.filter((m) => m.alunoId === id && m.status === 'paga' && m.dataPag)
+    .reduce((max, m) => (m.dataPag > max ? m.dataPag : max), '') || null;
+}
+// Sem nenhum pagamento, conta a partir da matrícula.
+const diasSemPagar = (a) => diasEntre(ultimoPagamento(a.id) || a.matricula || a.criadoEm, hoje());
+const ehSumido = (a) => a.ativo && diasSemPagar(a) >= (Number(E.config.diasSumido) || 60);
+
+// ---------- Saídas (churn) ----------
+const MOTIVOS_SAIDA = ['Financeiro', 'Horário', 'Mudou de cidade', 'Lesão ou saúde', 'Perdeu o interesse', 'Foi para outra academia', 'Não informou', 'Outro'];
+const saidaAtual = (a) => (!a.ativo && a.saidas && a.saidas.length ? a.saidas[a.saidas.length - 1] : null);
+
+// Aluno estava ativo na data? null = não dá para saber (inativado antes do registro de saídas).
+function ativoEm(a, iso) {
+  if ((a.matricula || a.criadoEm) > iso) return false;
+  const s = a.saidas || [];
+  if (!a.ativo && !s.length) return null;
+  return !s.some((x) => x.data <= iso && (!x.retorno || x.retorno > iso));
 }
 
 function recebidoEntre(de, ate) {
@@ -244,12 +266,16 @@ const acoes = {
     const ms = mensalidadesDoAluno(id);
     const totalPago = ms.filter((m) => m.status === 'paga').reduce((s, m) => s + Number(m.valorPago), 0);
     const atrasadas = atrasadasDoAluno(id);
+    const saida = saidaAtual(a);
+    const ultPag = ultimoPagamento(a.id);
     abrirModal(`
       <h3>${esc(a.nome)}</h3>
-      <div class="detalhe">${a.ativo ? '' : '<span class="etiqueta cancelada">Inativo</span> '}
+      <div class="detalhe">${a.ativo ? (ehSumido(a) ? `<span class="etiqueta atrasada">Sumido: ${diasSemPagar(a)} dias sem pagar</span><br>` : '') : '<span class="etiqueta cancelada">Inativo</span> '}
+        ${saida ? `Saiu em ${fmtData(saida.data)} · Motivo: ${esc(saida.motivo)}${saida.obs ? ' (' + esc(saida.obs) + ')' : ''}<br>` : ''}
         WhatsApp: ${esc(a.telefone || '-')}<br>
         Vence todo dia ${a.diaVenc} · ${brl(a.valor)}<br>
         Matrícula: ${fmtData(a.matricula)}${a.obs ? '<br>Obs.: ' + esc(a.obs) : ''}<br>
+        Último pagamento: ${ultPag ? fmtData(ultPag) : 'nenhum'}<br>
         <b>Total pago: ${brl(totalPago)}</b>
       </div>
       <div class="botoes">
@@ -265,12 +291,50 @@ const acoes = {
 
   async alternarAtivo(id) {
     const a = alunoPorId(id);
-    a.ativo = !a.ativo;
-    if (a.ativo) gerarParaAluno(a, compAtual());
+    if (a.ativo) { acoes.formSaida(id); return; }
+    a.ativo = true;
+    const s = a.saidas && a.saidas[a.saidas.length - 1];
+    if (s && !s.retorno) s.retorno = hoje();
+    gerarParaAluno(a, compAtual());
     await persistir();
-    avisar(a.ativo ? 'Aluno reativado.' : 'Aluno inativado. Mensalidades em aberto continuam na lista; cancele se for o caso.');
+    avisar('Aluno reativado.');
     acoes.fichaAluno(id);
     render();
+  },
+
+  // Inativar com data e motivo da saída (alimenta o churn nos Relatórios).
+  formSaida(id) {
+    const a = alunoPorId(id);
+    abrirModal(`
+      <h3>Inativar ${esc(a.nome)}</h3>
+      <form class="campos" id="f-saida">
+        <label>Data da saída<input name="data" type="date" required value="${hoje()}"></label>
+        <label>Motivo<select name="motivo" required>${MOTIVOS_SAIDA.map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+        <label>Observação<textarea name="obs" placeholder="Opcional"></textarea></label>
+        <label class="check"><input type="checkbox" name="cancelar" checked> Cancelar as mensalidades em aberto que vencem depois da saída</label>
+        <p class="ajuda">Mensalidades vencidas até a data da saída continuam em aberto, como dívida. Os pagamentos já recebidos não mudam.</p>
+        <div class="botoes">
+          <button type="button" class="btn secundario" onclick="acoes.fichaAluno('${a.id}')">Voltar</button>
+          <button type="submit" class="btn perigo">Inativar</button>
+        </div>
+      </form>`);
+    document.getElementById('f-saida').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const data = f.get('data');
+      a.ativo = false;
+      a.saidas = [...(a.saidas || []), { data, motivo: f.get('motivo'), obs: String(f.get('obs')).trim() }];
+      let n = 0;
+      if (f.get('cancelar')) {
+        E.mensalidades
+          .filter((m) => m.alunoId === a.id && m.status === 'aberta' && m.venc > data)
+          .forEach((m) => { m.status = 'cancelada'; n++; });
+      }
+      await persistir();
+      avisar(`Aluno inativado.${n ? ` ${n} mensalidade(s) cancelada(s).` : ''}`);
+      acoes.fichaAluno(id);
+      render();
+    };
   },
 
   async excluirAluno(id) {
@@ -402,8 +466,10 @@ const acoes = {
     const f = new FormData(ev.target);
     const v = lerValor(f.get('valorPadrao'));
     const tol = parseInt(f.get('tolerancia'), 10);
+    const sum = parseInt(f.get('diasSumido'), 10);
     if (!Number.isFinite(v) || v < 0) { avisar('Valor padrão inválido.'); return; }
     Object.assign(E.config, {
+      diasSumido: sum >= 15 && sum <= 365 ? sum : 60,
       academia: String(f.get('academia')).trim(),
       valorPadrao: v,
       tolerancia: Number.isFinite(tol) && tol >= 0 ? tol : 0,
@@ -695,26 +761,34 @@ function telaAtrasados() {
 
 function telaAlunos() {
   const termo = ui.busca.trim().toLowerCase();
+  const sumidos = ui.filtroAlunos === 'sumidos';
   const lista = E.alunos
-    .filter((a) => (ui.filtroAlunos === 'todos' || (ui.filtroAlunos === 'ativos') === a.ativo))
+    .filter((a) => (sumidos ? ehSumido(a) : ui.filtroAlunos === 'todos' || (ui.filtroAlunos === 'ativos') === a.ativo))
     .filter((a) => !termo || a.nome.toLowerCase().includes(termo) || String(a.telefone).includes(termo))
-    .sort((x, y) => x.nome.localeCompare(y.nome, 'pt-BR'));
+    .sort((x, y) => (sumidos ? diasSemPagar(y) - diasSemPagar(x) : x.nome.localeCompare(y.nome, 'pt-BR')));
+  const qtdSumidos = E.alunos.filter(ehSumido).length;
   const botaoFiltro = (k, r) => `<button class="${ui.filtroAlunos === k ? 'ativo' : ''}" onclick="ui.filtroAlunos='${k}';render()">${r}</button>`;
   return `
     <input class="busca" type="search" placeholder="Buscar por nome ou telefone" value="${esc(ui.busca)}" oninput="ui.busca=this.value;atualizarListaAlunos()">
-    <div class="filtros">${botaoFiltro('ativos', 'Ativos')}${botaoFiltro('inativos', 'Inativos')}${botaoFiltro('todos', 'Todos')}</div>
+    <div class="filtros">${botaoFiltro('ativos', 'Ativos')}${botaoFiltro('sumidos', `Sumidos${qtdSumidos ? ` (${qtdSumidos})` : ''}`)}${botaoFiltro('inativos', 'Inativos')}${botaoFiltro('todos', 'Todos')}</div>
+    ${sumidos ? `<p class="ajuda">Alunos ativos sem nenhum pagamento há ${Number(E.config.diasSumido) || 60} dias ou mais (sem pagamento, conta da matrícula). Abra a ficha para cobrar ou inativar. O prazo muda em Ajustes.</p>` : ''}
     <div class="lista" id="lista-alunos">${lista.length ? lista.map((a) => {
       const atr = atrasadasDoAluno(a.id);
-      const etq = !a.ativo ? '<span class="etiqueta cancelada">Inativo</span>'
+      const saida = saidaAtual(a);
+      const etq = !a.ativo ? `<span class="etiqueta cancelada">Inativo${saida ? ' desde ' + fmtData(saida.data) : ''}</span>`
         : atr.length ? `<span class="etiqueta atrasada">${atr.length} atrasada(s)</span>` : '<span class="etiqueta paga">Em dia</span>';
+      const ultPag = ultimoPagamento(a.id);
+      const det = sumidos
+        ? `${etq} ${diasSemPagar(a)} dias sem pagar · último: ${ultPag ? fmtData(ultPag) : 'nenhum'}`
+        : `${etq} Dia ${a.diaVenc} · ${brl(a.valor)}`;
       return `
         <div class="item clicavel ${a.ativo ? '' : 'inativo'}" onclick="acoes.fichaAluno('${a.id}')">
           <div class="info">
             <div class="nome">${esc(a.nome)}</div>
-            <div class="detalhe">${etq} Dia ${a.diaVenc} · ${brl(a.valor)}</div>
+            <div class="detalhe">${det}</div>
           </div>
         </div>`;
-    }).join('') : '<div class="vazio">Nenhum aluno encontrado.</div>'}</div>`;
+    }).join('') : `<div class="vazio">${sumidos ? 'Nenhum aluno sumido.' : 'Nenhum aluno encontrado.'}</div>`}</div>`;
 }
 
 // Atualiza só a lista ao digitar, para não perder o foco do campo de busca.
@@ -743,6 +817,21 @@ function telaRelatorios() {
   const atr = doMes.filter((m) => situacao(m) === 'atrasada').reduce((s, m) => s + Number(m.valor), 0);
   const atrGeral = E.mensalidades.filter((m) => situacao(m) === 'atrasada').reduce((s, m) => s + Number(m.valor), 0);
 
+  // Churn: saídas do mês / alunos ativos no fim do mês anterior.
+  const todasSaidas = E.alunos.flatMap((a) => (a.saidas || []).map((s) => ({ ...s, alunoId: a.id })));
+  const saidasAno = todasSaidas.filter((s) => s.data.startsWith(String(ano)));
+  const churn = meses.filter((c) => c <= comp).map((c) => {
+    const vespera = somarDias(`${c}-01`, -1);
+    const base = E.alunos.filter((a) => ativoEm(a, vespera) === true).length;
+    const entradas = E.alunos.filter((a) => compDe(a.matricula || a.criadoEm) === c).length;
+    const saidas = saidasAno.filter((s) => compDe(s.data) === c).length;
+    return { c, base, entradas, saidas, pct: base ? (saidas / base) * 100 : null };
+  });
+  const porMotivo = {};
+  saidasAno.forEach((s) => { porMotivo[s.motivo] = (porMotivo[s.motivo] || 0) + 1; });
+  const semRegistro = E.alunos.filter((a) => !a.ativo && !(a.saidas || []).length).length;
+  const pctBR = (v) => (v === null ? '-' : v.toFixed(1).replace('.', ',') + '%');
+
   return `
     <div class="navmes">
       <button class="btn secundario pequeno" onclick="ui.anoRel--;render()">◀</button>
@@ -770,6 +859,21 @@ function telaRelatorios() {
       <tr><td>Atrasado de ${fmtComp(comp)}</td><td class="num">${brl(atr)}</td></tr>
       <tr><td>Inadimplência do mês</td><td class="num"><b>${prev ? ((atr / prev) * 100).toFixed(1).replace('.', ',') + '%' : '-'}</b></td></tr>
       <tr><td>Atraso acumulado (todos os meses)</td><td class="num"><b>${brl(atrGeral)}</b></td></tr>
+    </tbody></table>
+
+    <h2>Entradas e saídas de alunos (${ano})</h2>
+    ${churn.length ? `<table class="tabela">
+      <thead><tr><th>Mês</th><th class="num">Base</th><th class="num">Entraram</th><th class="num">Saíram</th><th class="num">Churn</th></tr></thead>
+      <tbody>
+        ${churn.map((x) => `<tr><td>${fmtComp(x.c)}</td><td class="num">${x.base}</td><td class="num">${x.entradas}</td><td class="num">${x.saidas}</td><td class="num">${pctBR(x.pct)}</td></tr>`).join('')}
+        <tr><td><b>Total</b></td><td class="num"></td><td class="num"><b>${churn.reduce((s, x) => s + x.entradas, 0)}</b></td><td class="num"><b>${saidasAno.length}</b></td><td class="num"></td></tr>
+      </tbody>
+    </table>` : '<div class="vazio">Ano futuro.</div>'}
+    <p class="ajuda">Base = alunos ativos no fim do mês anterior. Churn = saíram no mês ÷ base. Entraram = matrículas no mês.${semRegistro ? ` ${semRegistro} aluno(s) inativado(s) antes desta versão não têm data de saída e ficam fora da conta.` : ''}</p>
+
+    <h2>Motivos de saída (${ano})</h2>
+    <table class="tabela"><tbody>
+      ${saidasAno.length ? Object.entries(porMotivo).sort((x, y) => y[1] - x[1]).map(([m, n]) => `<tr><td>${esc(m)}</td><td class="num">${n}</td><td class="num">${pctBR((n / saidasAno.length) * 100)}</td></tr>`).join('') : '<tr><td>Nenhuma saída registrada.</td></tr>'}
     </tbody></table>`;
 }
 
@@ -782,6 +886,7 @@ function telaConfig() {
         <label>Mensalidade padrão (R$)<input name="valorPadrao" inputmode="decimal" value="${numBR(c.valorPadrao)}"></label>
         <label>Tolerância (dias)<input name="tolerancia" type="number" min="0" max="31" value="${esc(c.tolerancia)}"></label>
       </div>
+      <label>Considerar "sumido" após (dias sem pagar)<input name="diasSumido" type="number" min="15" max="365" value="${esc(c.diasSumido)}"></label>
       <label>Chave Pix<input name="pix" value="${esc(c.pix)}" placeholder="CNPJ, e-mail, telefone..."></label>
       <label>Mensagem de lembrete (antes do vencimento)<textarea name="msgLembrete">${esc(c.msgLembrete)}</textarea></label>
       <label>Mensagem de atraso<textarea name="msgAtraso">${esc(c.msgAtraso)}</textarea></label>
@@ -821,7 +926,7 @@ function telaConfig() {
 
     <h2>Zona de perigo</h2>
     <button class="btn perigo cheio" onclick="acoes.apagarTudo()">Apagar todos os dados</button>
-    <p class="ajuda">Mensalidades da Academia · v1 · dados locais (IndexedDB)</p>`;
+    <p class="ajuda">Mensalidades da Academia · v2 · dados locais (IndexedDB)</p>`;
 }
 
 // ===================== Navegação =====================

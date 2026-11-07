@@ -181,3 +181,7 @@ table.tabela td.num, table.tabela th.num { text-align: right; white-space: nowra
 }
 
 .ajuda { font-size: 0.8rem; color: var(--suave); margin: 4px 4px 0; }
+
+/* Caixa de marcar dentro de formulário (ex.: cancelar mensalidades ao inativar) */
+form.campos label.check { flex-direction: row; align-items: center; gap: 10px; color: var(--texto); }
+form.campos label.check input { width: 20px; height: 20px; padding: 0; flex: none; }

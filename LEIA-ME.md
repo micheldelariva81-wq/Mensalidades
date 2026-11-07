@@ -8,16 +8,19 @@ App simples para controlar alunos e mensalidades da academia. Funciona offline, 
 | **Painel** | Recebido no mês, a receber, em atraso, alunos ativos, acumulado do ano x teto do MEI (R$ 81.000,00) e quem vence nos próximos 7 dias (com botão de lembrete) |
 | **Mês** | Mensalidades do mês, filtros (no prazo, atrasadas, pagas, canceladas) e botão **Baixa** |
 | **Atrasos** | Quem está devendo, há quantos dias, quanto, e o botão **WhatsApp** com a cobrança pronta |
-| **Alunos** | Cadastro, busca, ficha com histórico, inativar/reativar |
-| **Relatórios** | Entradas mês a mês, por forma de pagamento e inadimplência |
-| **Ajustes** | Valor padrão, tolerância, chave Pix, textos das mensagens, backup, exportar CSV e importar alunos |
+| **Alunos** | Cadastro, busca, ficha com histórico e último pagamento, inativar (com data e motivo da saída) e reativar. Filtro **Sumidos**: ativos sem pagar há 60 dias ou mais |
+| **Relatórios** | Entradas mês a mês, por forma de pagamento, inadimplência, entradas e saídas de alunos (churn) e motivos de saída |
+| **Ajustes** | Valor padrão, tolerância, prazo de "sumido", chave Pix, textos das mensagens, backup, exportar CSV e importar alunos |
 
 ## Regras
 - Ao abrir o app, as mensalidades do mês são criadas sozinhas para todos os alunos ativos, sem duplicar. Se o app ficar um mês sem ser aberto, ele cria o mês que faltou.
 - Vencimento no dia 31 em mês curto vai para o último dia do mês.
 - **Atrasada** = em aberto e passou do vencimento mais a tolerância (padrão: 3 dias).
 - Mudar o valor ou o dia de vencimento do aluno vale para as mensalidades em aberto do mês atual em diante.
-- Aluno inativado não gera mensalidades novas. As que já estavam em aberto continuam e podem ser canceladas.
+- Aluno inativado não gera mensalidades novas. Ao inativar, o app pede a **data e o motivo da saída** e oferece cancelar as mensalidades em aberto que vencem depois da saída. As vencidas até a saída continuam em aberto, como dívida.
+- Ao reativar, o app registra a data de retorno. O histórico de saídas fica guardado.
+- **Sumido** = aluno ativo sem nenhum pagamento há 60 dias ou mais (sem pagamento nenhum, conta da matrícula). O prazo muda em Ajustes. É um sinal pelo pagamento: o app não controla presença.
+- **Churn do mês** = alunos que saíram no mês ÷ alunos ativos no fim do mês anterior. Alunos inativados antes da versão 2 não têm data de saída e ficam fora dessa conta.
 - Os relatórios usam **regime de caixa**, ou seja, contam pela data do pagamento.
 
 ## Como publicar (GitHub Pages, grátis)
