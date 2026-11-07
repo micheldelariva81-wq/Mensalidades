@@ -22,6 +22,7 @@ App simples para controlar alunos e mensalidades da academia. Funciona offline, 
 - **Sumido** = aluno ativo sem nenhum pagamento há 60 dias ou mais (sem pagamento nenhum, conta da matrícula). O prazo muda em Ajustes. É um sinal pelo pagamento: o app não controla presença.
 - **Churn do mês** = alunos que saíram no mês ÷ alunos ativos no fim do mês anterior. Alunos inativados antes da versão 2 não têm data de saída e ficam fora dessa conta.
 - Os relatórios usam **regime de caixa**, ou seja, contam pela data do pagamento.
+- **Excluir aluno** (desde a versão 3) apaga o cadastro e as mensalidades em aberto ou canceladas, mas **mantém os pagamentos recebidos**, com o nome do aluno gravado. Assim, relatórios, teto do MEI e CSV continuam batendo com o extrato. Esses pagamentos não podem ter a baixa desfeita. As saídas do aluno excluído deixam de contar no churn, por isso, para quem saiu, prefira **Inativar**.
 
 ## Como publicar (GitHub Pages, grátis)
 Feito uma vez só, pelo navegador do computador. Não precisa instalar nada.

@@ -1,6 +1,6 @@
 // Guarda os arquivos do app no celular para abrir sem internet.
 // Ao mudar qualquer arquivo do app, aumente a VERSAO para os celulares baixarem a nova.
-const VERSAO = 'v2';
+const VERSAO = 'v3';
 const ARQUIVOS = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

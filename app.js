@@ -82,6 +82,8 @@ async function persistir() {
 
 const alunoPorId = (id) => E.alunos.find((a) => a.id === id);
 const mensPorId = (id) => E.mensalidades.find((m) => m.id === id);
+// Nome do aluno da mensalidade: do cadastro ou, se o aluno foi excluído, o nome gravado no pagamento.
+const nomeDaMens = (m) => { const a = alunoPorId(m.alunoId); return a ? a.nome : (m.alunoNome || 'Aluno removido'); };
 
 // ===================== Regras de negócio =====================
 
@@ -339,12 +341,18 @@ const acoes = {
 
   async excluirAluno(id) {
     const a = alunoPorId(id);
-    if (!confirm(`Excluir ${a.nome} e TODO o histórico de pagamentos? Isso não pode ser desfeito.\n\nPara só parar de cobrar, use "Inativar".`)) return;
+    const pagas = E.mensalidades.filter((m) => m.alunoId === id && m.status === 'paga');
+    const outras = E.mensalidades.filter((m) => m.alunoId === id && m.status !== 'paga');
+    if (!confirm(`Excluir o cadastro de ${a.nome}?\n\n` +
+      `• ${pagas.length} pagamento(s) recebido(s) ficam guardados nos relatórios, no teto do MEI e no CSV.\n` +
+      `• ${outras.length} mensalidade(s) em aberto ou cancelada(s) serão apagadas.\n\n` +
+      `Isso não pode ser desfeito. Para só parar de cobrar, use "Inativar".`)) return;
+    pagas.forEach((m) => { m.alunoNome = a.nome; });
+    E.mensalidades = E.mensalidades.filter((m) => m.alunoId !== id || m.status === 'paga');
     E.alunos = E.alunos.filter((x) => x.id !== id);
-    E.mensalidades = E.mensalidades.filter((m) => m.alunoId !== id);
     await persistir();
     fecharModal();
-    avisar('Aluno excluído.');
+    avisar(`Cadastro excluído. ${pagas.length} pagamento(s) mantido(s).`);
     render();
   },
 
@@ -354,18 +362,19 @@ const acoes = {
     const a = alunoPorId(m.alunoId);
     const s = situacao(m);
     abrirModal(`
-      <h3>${esc(a ? a.nome : 'Aluno removido')}</h3>
+      <h3>${esc(nomeDaMens(m))}${a ? '' : ' <span class="etiqueta cancelada">Excluído</span>'}</h3>
       <div class="detalhe">
         Competência: <b>${fmtComp(m.comp)}</b> · <span class="etiqueta ${s}">${ROTULO[s]}</span><br>
         Vencimento: ${fmtData(m.venc)} · Valor: ${brl(m.valor)}<br>
         ${m.status === 'paga' ? `Pago em ${fmtData(m.dataPag)} · ${brl(m.valorPago)} · ${esc(m.forma)}<br>` : ''}
         ${s === 'atrasada' ? `${diasAtraso(m)} dias de atraso<br>` : ''}
         ${m.ultimoAviso ? `Último aviso: ${fmtData(m.ultimoAviso)}` : ''}
+        ${a ? '' : '<p class="ajuda">O cadastro deste aluno foi excluído. O pagamento fica guardado para os relatórios e não pode ter a baixa desfeita.</p>'}
       </div>
       <div class="botoes">
         ${m.status === 'aberta' ? `<button class="btn ok" onclick="acoes.formBaixa('${m.id}')">Dar baixa</button>` : ''}
         ${m.status === 'aberta' && a ? `<button class="btn whats" onclick="enviarWhats('${a.id}','${s === 'atrasada' ? 'atraso' : 'lembrete'}',['${m.id}'])">WhatsApp</button>` : ''}
-        ${m.status === 'paga' ? `<button class="btn secundario" onclick="acoes.desfazerBaixa('${m.id}')">Desfazer baixa</button>` : ''}
+        ${m.status === 'paga' && a ? `<button class="btn secundario" onclick="acoes.desfazerBaixa('${m.id}')">Desfazer baixa</button>` : ''}
         ${m.status === 'aberta' ? `<button class="btn secundario" onclick="acoes.formEditarMens('${m.id}')">Editar</button>` : ''}
         ${m.status === 'aberta' ? `<button class="btn perigo" onclick="acoes.cancelarMens('${m.id}')">Cancelar cobrança</button>` : ''}
         ${m.status === 'cancelada' ? `<button class="btn secundario" onclick="acoes.reabrirMens('${m.id}')">Reabrir</button>` : ''}
@@ -430,6 +439,7 @@ const acoes = {
 
   async desfazerBaixa(id) {
     const m = mensPorId(id);
+    if (!alunoPorId(m.alunoId)) { avisar('Aluno excluído: a baixa não pode ser desfeita.'); return; }
     if (!confirm('Desfazer a baixa desta mensalidade?')) return;
     Object.assign(m, { status: 'aberta', dataPag: null, valorPago: null, forma: null });
     await persistir();
@@ -532,8 +542,7 @@ const acoes = {
     const limpa = (s) => String(s || '').replace(/[;\r\n]/g, ' ');
     const linhas = ['data;historico;valor;conta;origem;id_extrato;observacao'];
     pagas.forEach((m) => {
-      const a = alunoPorId(m.alunoId);
-      linhas.push([fmtData(m.dataPag), limpa(`Mensalidade ${fmtComp(m.comp)} - ${a ? a.nome : 'aluno removido'}`),
+      linhas.push([fmtData(m.dataPag), limpa(`Mensalidade ${fmtComp(m.comp)} - ${nomeDaMens(m)}`),
         numBR(m.valorPago), 'R01', 'app-academia', 'app-' + m.id.slice(0, 8), limpa(m.forma)].join(';'));
     });
     const nome = `recebimentos-app-${mes ? fmtComp(mes).replace('/', '-') : 'tudo'}.csv`;
@@ -605,7 +614,7 @@ function itemMensalidade(m, opc = {}) {
   let det = `Vence ${fmtData(m.venc)} · ${brl(m.valor)}`;
   if (m.status === 'paga') det = `Pago ${fmtDiaMes(m.dataPag)} · ${brl(m.valorPago)} · ${esc(m.forma)}`;
   if (s === 'atrasada') det += ` · ${diasAtraso(m)}d`;
-  const titulo = opc.semNome ? `${fmtComp(m.comp)}` : esc(a ? a.nome : 'Aluno removido');
+  const titulo = opc.semNome ? `${fmtComp(m.comp)}` : esc(nomeDaMens(m));
   const acao = m.status === 'aberta'
     ? `<button class="btn ok pequeno" onclick="event.stopPropagation();acoes.formBaixa('${m.id}')">Baixa</button>`
     : '';
@@ -926,7 +935,7 @@ function telaConfig() {
 
     <h2>Zona de perigo</h2>
     <button class="btn perigo cheio" onclick="acoes.apagarTudo()">Apagar todos os dados</button>
-    <p class="ajuda">Mensalidades da Academia · v2 · dados locais (IndexedDB)</p>`;
+    <p class="ajuda">Mensalidades da Academia · v3 · dados locais (IndexedDB)</p>`;
 }
 
 // ===================== Navegação =====================
