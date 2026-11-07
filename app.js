@@ -935,7 +935,7 @@ function telaConfig() {
 
     <h2>Zona de perigo</h2>
     <button class="btn perigo cheio" onclick="acoes.apagarTudo()">Apagar todos os dados</button>
-    <p class="ajuda">Mensalidades da Academia · v3 · dados locais (IndexedDB)</p>`;
+    <p class="ajuda">Mensalidades da Academia · v4 · dados locais (IndexedDB)</p>`;
 }
 
 // ===================== Navegação =====================
