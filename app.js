@@ -1262,10 +1262,211 @@ function telaConfig() {
       <input id="in-importar" type="file" accept=".csv,text/csv,text/plain" hidden onchange="acoes.importarAlunos(this)">
     </div>
 
+    <h2>🔒 Segurança</h2>
+    <div class="cartao">
+      <p class="detalhe" style="margin-top:0">O app pede o PIN sempre que é aberto e depois de ${BLOQUEIO_MIN} minutos fora dele. O PIN fica só neste celular e não vai para os backups.</p>
+      <div class="botoes">
+        <button class="btn" onclick="acoes.bloquearAgora()">Bloquear agora</button>
+        <button class="btn secundario" onclick="acoes.formTrocarPin()">Trocar PIN</button>
+      </div>
+      <button class="btn secundario cheio" style="margin-top:8px" onclick="acoes.formNovoCodigo()">Gerar novo código de recuperação</button>
+    </div>
+
     <h2>Zona de perigo</h2>
     <button class="btn perigo cheio" onclick="acoes.apagarTudo()">Apagar todos os dados</button>
-    <p class="ajuda">Mensalidades da Academia · v7 · dados locais + backup no Google Drive</p>`;
+    <p class="ajuda">Mensalidades da Academia · v8 · dados locais + backup no Google Drive + PIN</p>`;
 }
+
+// ===================== Acesso por PIN =====================
+// O PIN e o código de recuperação ficam só no celular (db.js: carregarAcesso), embaralhados (hash com sal).
+// Pede o PIN ao abrir o app e depois de BLOQUEIO_MIN minutos em segundo plano.
+
+const BLOQUEIO_MIN = 5;
+const acesso = { dados: null, travado: true, modo: 'entrar', codigoNovo: '', escondidoEm: null };
+
+const hexDe = (buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+async function hashCom(sal, txt) {
+  return hexDe(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sal + ':' + txt)));
+}
+const novoSal = () => hexDe(crypto.getRandomValues(new Uint8Array(16)));
+// Sem letras que confundem (0/O, 1/I/L). Ex.: K7M2-QX9P-4TRA
+function gerarCodigoRecuperacao() {
+  const alfa = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const r = crypto.getRandomValues(new Uint8Array(12));
+  const s = Array.from(r, (b) => alfa[b % alfa.length]).join('');
+  return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}`;
+}
+const limparCodigo = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const pinValido = (p) => /^\d{4,8}$/.test(p);
+
+async function gravarPin(pin) {
+  const sal = novoSal();
+  acesso.dados = { ...(acesso.dados || {}), sal, pinHash: await hashCom(sal, pin), alteradoEm: new Date().toISOString() };
+  await salvarAcesso(acesso.dados);
+}
+async function gravarNovoCodigo() {
+  const codigo = gerarCodigoRecuperacao();
+  const recSal = novoSal();
+  acesso.dados = { ...acesso.dados, recSal, recHash: await hashCom(recSal, limparCodigo(codigo)) };
+  await salvarAcesso(acesso.dados);
+  return codigo;
+}
+const conferePin = async (pin) => !!acesso.dados && (await hashCom(acesso.dados.sal, pin)) === acesso.dados.pinHash;
+
+function bloquearApp() {
+  acesso.travado = true;
+  acesso.modo = 'entrar';
+  fecharModal();
+  render();
+}
+
+function telaBloqueio() {
+  const nome = E.config.academia ? esc(E.config.academia) : 'Mensalidades da Academia';
+  const topo = `<div style="text-align:center;margin:18px 0 6px;font-size:2.4rem">🥋</div><h2 style="text-align:center;margin-top:0">${nome}</h2>`;
+  const campoPin = (id, rot) => `<label>${rot}<input id="${id}" type="password" inputmode="numeric" maxlength="8" autocomplete="off" required></label>`;
+  if (!acesso.dados || !acesso.dados.pinHash || acesso.modo === 'criar' || acesso.modo === 'novo') {
+    const novo = acesso.modo === 'novo';
+    return `${topo}
+      <form class="campos cartao" onsubmit="acoes.criarPin(event)">
+        <h3 style="margin:0">🔒 ${novo ? 'Crie um PIN novo' : 'Crie o seu PIN de acesso'}</h3>
+        <p class="detalhe" style="margin:0">${novo ? 'Código de recuperação confirmado. Os alunos e pagamentos continuam guardados.' : 'O PIN protege os dados dos alunos. Ele será pedido sempre que abrir o app e depois de ' + BLOQUEIO_MIN + ' minutos fora dele.'}</p>
+        ${campoPin('pin-novo', 'PIN (4 a 8 números)')}
+        ${campoPin('pin-novo2', 'Repita o PIN')}
+        <button class="btn ok cheio" type="submit">${novo ? 'Salvar PIN novo' : 'Criar PIN'}</button>
+        ${novo ? '<button class="btn secundario cheio" type="button" onclick="acoes.voltarEntrar()">Cancelar</button>' : ''}
+      </form>`;
+  }
+  if (acesso.modo === 'codigo') {
+    return `${topo}
+      <div class="cartao">
+        <h3 style="margin-top:0">🔑 Seu código de recuperação</h3>
+        <p class="detalhe">Se esquecer o PIN, é com este código que você cria um novo, sem perder nenhum dado. <b>Guarde agora</b>, por exemplo numa mensagem fixada no seu WhatsApp. Ele não aparece de novo.${driveConfigurado() ? ' O código secreto do backup no Drive também serve para redefinir.' : ''}</p>
+        <p style="font-family:monospace;font-size:1.6rem;text-align:center;letter-spacing:2px;margin:14px 0"><b>${esc(acesso.codigoNovo)}</b></p>
+        <div class="botoes">
+          <button class="btn" onclick="acoes.copiarCodigo()">Copiar</button>
+          <button class="btn secundario" onclick="acoes.codigoWhats()">Enviar no WhatsApp</button>
+        </div>
+        <label style="flex-direction:row;align-items:center;gap:8px;margin-top:12px;display:flex"><input id="ck-guardei" type="checkbox"> Guardei o código</label>
+        <button class="btn ok cheio" style="margin-top:10px" onclick="acoes.concluirCodigo()">Continuar</button>
+      </div>`;
+  }
+  if (acesso.modo === 'recuperar') {
+    const comDrive = driveConfigurado();
+    return `${topo}
+      <form class="campos cartao" onsubmit="acoes.recuperarPin(event)">
+        <h3 style="margin:0">🔑 Redefinir PIN</h3>
+        <p class="detalhe" style="margin:0">Digite o <b>código de recuperação</b> (ex.: K7M2-QX9P-4TRA)${comDrive ? ' <b>ou</b> o <b>código secreto do backup no Google Drive</b>' : ''}. Depois você cria um PIN novo.</p>
+        <p class="detalhe" style="margin:0">✅ Nenhum dado é apagado: alunos, mensalidades e pagamentos continuam como estão.</p>
+        <label>${comDrive ? 'Código de recuperação ou código do Drive' : 'Código de recuperação'}<input id="cod-rec" autocomplete="off" required></label>
+        <button class="btn ok cheio" type="submit">Confirmar</button>
+        <button class="btn secundario cheio" type="button" onclick="acoes.voltarEntrar()">Voltar</button>
+        ${comDrive ? '<p class="ajuda">Não acha nenhum dos dois? O código do Drive está no seu script, em script.google.com > projeto "Backup Mensalidades", na linha <code>const CODIGO</code>.</p>' : ''}
+      </form>`;
+  }
+  return `${topo}
+    <form class="campos cartao" onsubmit="acoes.entrarPin(event)">
+      <h3 style="margin:0">🔒 Digite o seu PIN</h3>
+      ${campoPin('pin-entrar', 'PIN')}
+      <button class="btn ok cheio" type="submit">Entrar</button>
+      <button class="btn secundario cheio" type="button" onclick="acoes.esqueciPin()">Esqueci o PIN (redefinir)</button>
+    </form>`;
+}
+
+Object.assign(acoes, {
+  async criarPin(ev) {
+    ev.preventDefault();
+    const p1 = document.getElementById('pin-novo').value.trim();
+    const p2 = document.getElementById('pin-novo2').value.trim();
+    if (!pinValido(p1)) return avisar('O PIN deve ter de 4 a 8 números.');
+    if (p1 !== p2) return avisar('Os PINs não conferem.');
+    const primeiraVez = !acesso.dados || !acesso.dados.recHash;
+    await gravarPin(p1);
+    if (primeiraVez) {
+      acesso.codigoNovo = await gravarNovoCodigo();
+      acesso.modo = 'codigo';
+      return render();
+    }
+    acesso.travado = false;
+    acesso.modo = 'entrar';
+    avisar('PIN novo salvo.');
+    render();
+  },
+  async entrarPin(ev) {
+    ev.preventDefault();
+    const el = document.getElementById('pin-entrar');
+    if (!(await conferePin(el.value.trim()))) { el.value = ''; return avisar('PIN incorreto.'); }
+    acesso.travado = false;
+    if (gerarPendentes()) await persistir();
+    render();
+  },
+  esqueciPin() { acesso.modo = 'recuperar'; render(); },
+  voltarEntrar() { acesso.modo = 'entrar'; render(); },
+  async recuperarPin(ev) {
+    ev.preventDefault();
+    const d = acesso.dados;
+    const digitado = document.getElementById('cod-rec').value.trim();
+    const okRec = !!(d && d.recHash) && (await hashCom(d.recSal, limparCodigo(digitado))) === d.recHash;
+    // Também vale o código secreto do backup no Drive (o mesmo do script do Google).
+    const okDrive = driveConfigurado() && digitado === String(E.config.driveToken).trim();
+    if (!okRec && !okDrive) return avisar('Código incorreto.');
+    acesso.modo = 'novo'; // o PIN antigo continua valendo até o novo ser salvo
+    render();
+  },
+  async copiarCodigo() {
+    try { await navigator.clipboard.writeText(acesso.codigoNovo); avisar('Código copiado.'); }
+    catch { avisar('Não deu para copiar. Anote o código.'); }
+  },
+  codigoWhats() {
+    const txt = `Código de recuperação do app Mensalidades da Academia: ${acesso.codigoNovo}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank');
+  },
+  concluirCodigo() {
+    if (!document.getElementById('ck-guardei').checked) return avisar('Guarde o código e marque "Guardei o código".');
+    acesso.codigoNovo = '';
+    acesso.modo = 'entrar';
+    acesso.travado = false;
+    render();
+  },
+  bloquearAgora() { bloquearApp(); },
+  formTrocarPin() {
+    abrirModal(`
+      <h3>Trocar PIN</h3>
+      <form class="campos" onsubmit="acoes.trocarPin(event)">
+        <label>PIN atual<input id="pin-atual" type="password" inputmode="numeric" maxlength="8" autocomplete="off" required></label>
+        <label>PIN novo (4 a 8 números)<input id="pin-t1" type="password" inputmode="numeric" maxlength="8" autocomplete="off" required></label>
+        <label>Repita o PIN novo<input id="pin-t2" type="password" inputmode="numeric" maxlength="8" autocomplete="off" required></label>
+        <div class="botoes"><button type="button" class="btn secundario" onclick="fecharModal()">Cancelar</button><button class="btn ok" type="submit">Salvar</button></div>
+      </form>`);
+  },
+  async trocarPin(ev) {
+    ev.preventDefault();
+    if (!(await conferePin(document.getElementById('pin-atual').value.trim()))) return avisar('PIN atual incorreto.');
+    const p1 = document.getElementById('pin-t1').value.trim();
+    if (!pinValido(p1)) return avisar('O PIN deve ter de 4 a 8 números.');
+    if (p1 !== document.getElementById('pin-t2').value.trim()) return avisar('Os PINs novos não conferem.');
+    await gravarPin(p1);
+    fecharModal();
+    avisar('PIN trocado.');
+  },
+  formNovoCodigo() {
+    abrirModal(`
+      <h3>Gerar novo código de recuperação</h3>
+      <p class="detalhe">O código antigo deixa de valer. Confirme com o seu PIN.</p>
+      <form class="campos" onsubmit="acoes.novoCodigo(event)">
+        <label>PIN<input id="pin-cod" type="password" inputmode="numeric" maxlength="8" autocomplete="off" required></label>
+        <div class="botoes"><button type="button" class="btn secundario" onclick="fecharModal()">Cancelar</button><button class="btn ok" type="submit">Gerar</button></div>
+      </form>`);
+  },
+  async novoCodigo(ev) {
+    ev.preventDefault();
+    if (!(await conferePin(document.getElementById('pin-cod').value.trim()))) return avisar('PIN incorreto.');
+    acesso.codigoNovo = await gravarNovoCodigo();
+    acesso.modo = 'codigo';
+    acesso.travado = true; // mostra o código na tela cheia; "Continuar" volta ao app
+    fecharModal();
+    render();
+  },
+});
 
 // ===================== Navegação =====================
 
@@ -1279,6 +1480,18 @@ const TELAS = {
 };
 
 function render() {
+  const nav = document.querySelector('.abas');
+  const btnAluno = document.getElementById('btn-novo-aluno');
+  if (acesso.travado) {
+    nav.style.display = 'none';
+    btnAluno.style.display = 'none';
+    document.getElementById('titulo').textContent = 'Mensalidades';
+    document.getElementById('conteudo').innerHTML = telaBloqueio();
+    window.scrollTo(0, 0);
+    return;
+  }
+  nav.style.display = '';
+  btnAluno.style.display = '';
   const [titulo, fn] = TELAS[ui.aba];
   document.getElementById('titulo').textContent = titulo;
   document.getElementById('conteudo').innerHTML = fn();
@@ -1292,15 +1505,20 @@ function render() {
 document.querySelectorAll('.abas button').forEach((b) => {
   b.addEventListener('click', () => { ui.aba = b.dataset.aba; window.scrollTo(0, 0); render(); });
 });
-document.getElementById('btn-novo-aluno').addEventListener('click', () => acoes.formAluno());
+document.getElementById('btn-novo-aluno').addEventListener('click', () => { if (!acesso.travado) acoes.formAluno(); });
 
 // Ao voltar para o app (ex.: depois do WhatsApp), recalcula datas e gera meses novos.
 document.addEventListener('visibilitychange', async () => {
   // Ao sair do app, tenta enviar na hora o que estiver pendente.
   if (document.visibilityState !== 'visible') {
+    acesso.escondidoEm = Date.now();
     if (drivePendente()) { clearTimeout(timerDrive); enviarDrive(false); }
     return;
   }
+  // Ficou fora do app por BLOQUEIO_MIN minutos ou mais: pede o PIN de novo.
+  const longe = acesso.escondidoEm && Date.now() - acesso.escondidoEm >= BLOQUEIO_MIN * 60000;
+  acesso.escondidoEm = null;
+  if (longe && !acesso.travado) { acesso.travado = true; acesso.modo = 'entrar'; fecharModal(); }
   if (gerarPendentes()) await persistir();
   else if (drivePendente()) agendarBackupDrive(2000);
   if (!modal.open) render();
@@ -1316,6 +1534,9 @@ async function iniciar() {
   } catch (e) {
     avisar('Erro ao abrir os dados: ' + e.message);
   }
+  try { acesso.dados = await carregarAcesso(); } catch { acesso.dados = null; }
+  acesso.travado = true;
+  acesso.modo = 'entrar';
   if (gerarPendentes()) await persistir();
   else if (!E.config.ultimaCompGerada) await persistir();
   if (drivePendente()) agendarBackupDrive(3000);
