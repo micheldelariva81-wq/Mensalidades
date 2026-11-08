@@ -1,6 +1,6 @@
 // Guarda os arquivos do app no celular para abrir sem internet.
 // Ao mudar qualquer arquivo do app, aumente a VERSAO para os celulares baixarem a nova.
-const VERSAO = 'v5';
+const VERSAO = 'v6';
 const ARQUIVOS = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 // 'reload' baixa direto do servidor, sem usar cópias antigas do navegador.

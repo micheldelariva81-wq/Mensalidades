@@ -185,3 +185,26 @@ table.tabela td.num, table.tabela th.num { text-align: right; white-space: nowra
 /* Caixa de marcar dentro de formulário (ex.: cancelar mensalidades ao inativar) */
 form.campos label.check { flex-direction: row; align-items: center; gap: 10px; color: var(--texto); }
 form.campos label.check input { width: 20px; height: 20px; padding: 0; flex: none; }
+
+/* Recibo */
+.recibo { border: 2px solid var(--primaria); border-radius: 12px; padding: 16px; margin: 10px 0; background: #fff; color: #111; font-size: 0.95rem; line-height: 1.45; }
+.recibo p { margin: 0 0 10px; }
+.recibo-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 10px; }
+.recibo-titulo { font-size: 1.4rem; font-weight: 800; letter-spacing: 0.08em; color: #14213d; }
+.recibo-num { font-size: 0.85rem; color: #555; }
+.recibo-valor { font-size: 1.3rem; font-weight: 800; border: 2px solid #14213d; border-radius: 8px; padding: 6px 10px; white-space: nowrap; }
+.recibo-emissor { font-weight: 700; margin-bottom: 10px; }
+.recibo-local { text-align: right; }
+.recibo-assinatura { text-align: center; margin-top: 40px; font-size: 0.9rem; }
+.recibo-assinatura span { display: block; border-top: 1px solid #111; width: 70%; margin: 0 auto 6px; }
+#area-recibo { display: none; }
+
+/* PDF do recibo: imprime só o recibo */
+@media print {
+  body.imprimindo-recibo > *:not(#area-recibo) { display: none !important; }
+  body.imprimindo-recibo #area-recibo { display: block; }
+  html, body.imprimindo-recibo { background: #fff !important; }
+  body.imprimindo-recibo .recibo { max-width: 170mm; margin: 0 auto; font-size: 12pt; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  @page { margin: 18mm; }
+}

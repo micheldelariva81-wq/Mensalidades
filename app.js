@@ -68,6 +68,11 @@ function estadoInicial() {
       tetoMei: 81000,
       diasSumido: 60,
       ultimaCompGerada: null,
+      // Recibos
+      responsavel: '',
+      documento: '', // CNPJ do MEI ou CPF de quem assina
+      cidade: '',
+      proxRecibo: 1,
     },
     ultimoBackup: null,
   };
@@ -199,6 +204,106 @@ async function enviarWhats(alunoId, tipo, mensIds) {
   lista.forEach((m) => { m.ultimoAviso = hoje(); });
   await persistir();
   render();
+}
+
+// ===================== Recibos =====================
+
+// Valor por extenso em reais (até milhões), ex.: 170 -> "cento e setenta reais".
+function porExtenso(valor) {
+  const U = ['', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove', 'dez', 'onze', 'doze', 'treze', 'quatorze', 'quinze', 'dezesseis', 'dezessete', 'dezoito', 'dezenove'];
+  const D = ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'];
+  const C = ['', 'cento', 'duzentos', 'trezentos', 'quatrocentos', 'quinhentos', 'seiscentos', 'setecentos', 'oitocentos', 'novecentos'];
+  const ate999 = (n) => {
+    if (n === 0) return '';
+    if (n === 100) return 'cem';
+    const partes = [];
+    const ce = Math.floor(n / 100);
+    const r = n % 100;
+    if (ce) partes.push(C[ce]);
+    if (r) partes.push(r < 20 ? U[r] : D[Math.floor(r / 10)] + (r % 10 ? ' e ' + U[r % 10] : ''));
+    return partes.join(' e ');
+  };
+  const total = Math.round((Number(valor) || 0) * 100);
+  const inteiro = Math.floor(total / 100);
+  const cent = total % 100;
+  const mi = Math.floor(inteiro / 1e6);
+  const mil = Math.floor((inteiro % 1e6) / 1000);
+  const un = inteiro % 1000;
+  const grupos = [];
+  if (mi) grupos.push(ate999(mi) + (mi === 1 ? ' milhão' : ' milhões'));
+  if (mil) grupos.push(mil === 1 ? 'mil' : ate999(mil) + ' mil');
+  if (un) grupos.push(ate999(un));
+  let reais = '';
+  grupos.forEach((g, i) => {
+    if (i === 0) { reais = g; return; }
+    const ultimo = i === grupos.length - 1;
+    reais += (ultimo && un && (un < 100 || un % 100 === 0) ? ' e ' : ' ') + g;
+  });
+  if (inteiro) reais += mi && !mil && !un ? ' de reais' : inteiro === 1 ? ' real' : ' reais';
+  const centavos = cent ? `${ate999(cent)} ${cent === 1 ? 'centavo' : 'centavos'}` : '';
+  if (!inteiro && !cent) return 'zero reais';
+  return [reais, centavos].filter(Boolean).join(' e ');
+}
+
+const dataPorExtenso = (iso) => { const d = dataDe(iso); return `${d.getDate()} de ${d.toLocaleDateString('pt-BR', { month: 'long' })} de ${d.getFullYear()}`; };
+const numRecibo = (n) => String(n).padStart(4, '0');
+
+// Dá número ao recibo na primeira vez; depois, reenviar usa o mesmo número.
+async function garantirNumero(m) {
+  if (m.recibo) return m.recibo;
+  m.recibo = Number(E.config.proxRecibo) || 1;
+  m.reciboEm = hoje();
+  E.config.proxRecibo = m.recibo + 1;
+  await persistir();
+  return m.recibo;
+}
+
+function dadosRecibo(m) {
+  const c = E.config;
+  return {
+    numero: numRecibo(m.recibo),
+    aluno: nomeDaMens(m),
+    valor: brl(m.valorPago),
+    extenso: porExtenso(m.valorPago),
+    referente: `mensalidade de ${nomeMes(m.comp).toLowerCase()} (${fmtComp(m.comp)})`,
+    pagoEm: fmtData(m.dataPag),
+    forma: m.forma || '',
+    local: `${c.cidade ? c.cidade + ', ' : ''}${dataPorExtenso(m.reciboEm || hoje())}`,
+    academia: c.academia || '',
+    responsavel: c.responsavel || '',
+    documento: c.documento || '',
+  };
+}
+
+function textoReciboWhats(m) {
+  const r = dadosRecibo(m);
+  return [
+    `🧾 *RECIBO Nº ${r.numero}*`,
+    r.academia ? `*${r.academia}*${r.documento ? ` · CNPJ/CPF ${r.documento}` : ''}` : '',
+    '',
+    `Recebemos de *${r.aluno}* a importância de *${r.valor}* (${r.extenso}), referente à ${r.referente}, paga em ${r.pagoEm}${r.forma ? ` via ${r.forma}` : ''}.`,
+    '',
+    `${r.local}.`,
+    r.responsavel ? `${r.responsavel}${r.academia ? ` · ${r.academia}` : ''}` : '',
+    '',
+    'Obrigado! Oss! 🥋',
+  ].join('\n').replace(/\n{3,}/g, '\n\n').trim(); // tira linhas vazias repetidas (campos não preenchidos)
+}
+
+function htmlRecibo(m) {
+  const r = dadosRecibo(m);
+  return `
+    <div class="recibo">
+      <div class="recibo-topo">
+        <div><div class="recibo-titulo">RECIBO</div><div class="recibo-num">Nº ${esc(r.numero)}</div></div>
+        <div class="recibo-valor">${esc(r.valor)}</div>
+      </div>
+      ${r.academia ? `<div class="recibo-emissor">${esc(r.academia)}${r.documento ? ` · CNPJ/CPF ${esc(r.documento)}` : ''}</div>` : ''}
+      <p>Recebemos de <b>${esc(r.aluno)}</b> a importância de <b>${esc(r.valor)}</b> (${esc(r.extenso)}), referente à ${esc(r.referente)}, paga em ${esc(r.pagoEm)}${r.forma ? ` via ${esc(r.forma)}` : ''}.</p>
+      <p>Para clareza, firmamos o presente recibo.</p>
+      <p class="recibo-local">${esc(r.local)}.</p>
+      <div class="recibo-assinatura"><span></span>${esc(r.responsavel || 'Responsável')}${r.academia ? `<br><small>${esc(r.academia)}</small>` : ''}</div>
+    </div>`;
 }
 
 // ===================== Modal =====================
@@ -374,6 +479,7 @@ const acoes = {
       <div class="botoes">
         ${m.status === 'aberta' ? `<button class="btn ok" onclick="acoes.formBaixa('${m.id}')">Dar baixa</button>` : ''}
         ${m.status === 'aberta' && a ? `<button class="btn whats" onclick="enviarWhats('${a.id}','${s === 'atrasada' ? 'atraso' : 'lembrete'}',['${m.id}'])">WhatsApp</button>` : ''}
+        ${m.status === 'paga' ? `<button class="btn" onclick="acoes.recibo('${m.id}')">🧾 Recibo${m.recibo ? ` nº ${numRecibo(m.recibo)}` : ''}</button>` : ''}
         ${m.status === 'paga' && a ? `<button class="btn secundario" onclick="acoes.desfazerBaixa('${m.id}')">Desfazer baixa</button>` : ''}
         ${m.status === 'aberta' ? `<button class="btn secundario" onclick="acoes.formEditarMens('${m.id}')">Editar</button>` : ''}
         ${m.status === 'aberta' ? `<button class="btn perigo" onclick="acoes.cancelarMens('${m.id}')">Cancelar cobrança</button>` : ''}
@@ -406,10 +512,69 @@ const acoes = {
       if (!Number.isFinite(v) || v <= 0) { avisar('Valor inválido.'); return; }
       Object.assign(m, { status: 'paga', dataPag: f.get('data'), valorPago: v, forma: f.get('forma') });
       await persistir();
-      fecharModal();
-      avisar(`Baixa registrada: ${brl(v)}.`);
       render();
+      acoes.posBaixa(m.id);
     };
+  },
+
+  // Logo após a baixa: oferece o recibo.
+  posBaixa(id) {
+    const m = mensPorId(id);
+    const a = alunoPorId(m.alunoId);
+    const temWhats = a && numeroWhats(a.telefone);
+    abrirModal(`
+      <h3>✅ Baixa registrada</h3>
+      <p class="detalhe">${esc(nomeDaMens(m))} · ${fmtComp(m.comp)} · ${brl(m.valorPago)} · ${esc(m.forma)}</p>
+      <p>Quer enviar o recibo?</p>
+      <div class="botoes">
+        ${temWhats ? `<button class="btn whats" onclick="acoes.reciboWhats('${m.id}')">🧾 Enviar recibo no WhatsApp</button>` : ''}
+        <button class="btn" onclick="acoes.recibo('${m.id}')">Ver recibo / PDF</button>
+      </div>
+      <div class="botoes"><button class="btn secundario" onclick="fecharModal()">Agora não</button></div>`);
+  },
+
+  async recibo(id) {
+    const m = mensPorId(id);
+    if (!m || m.status !== 'paga') return;
+    await garantirNumero(m);
+    const a = alunoPorId(m.alunoId);
+    const temWhats = a && numeroWhats(a.telefone);
+    const c = E.config;
+    const faltam = !c.academia || !c.responsavel || !c.documento || !c.cidade;
+    abrirModal(`
+      <h3>Recibo nº ${numRecibo(m.recibo)}</h3>
+      ${faltam ? '<p class="faixa-aviso">Complete os dados do recibo em <b>Ajustes &gt; Recibos</b> (academia, responsável, CNPJ/CPF e cidade).</p>' : ''}
+      ${htmlRecibo(m)}
+      <div class="botoes">
+        ${temWhats ? `<button class="btn whats" onclick="acoes.reciboWhats('${m.id}')">WhatsApp</button>` : ''}
+        <button class="btn" onclick="acoes.reciboPDF('${m.id}')">📄 Salvar PDF</button>
+      </div>
+      <div class="botoes"><button class="btn secundario" onclick="fecharModal()">Fechar</button></div>`);
+  },
+
+  async reciboWhats(id) {
+    const m = mensPorId(id);
+    const a = alunoPorId(m.alunoId);
+    const num = a && numeroWhats(a.telefone);
+    if (!num) { avisar('Telefone inválido. Edite o cadastro do aluno (DDD + número).'); return; }
+    await garantirNumero(m);
+    window.open(`https://wa.me/${num}?text=${encodeURIComponent(textoReciboWhats(m))}`, '_blank');
+    fecharModal();
+    render();
+  },
+
+  async reciboPDF(id) {
+    const m = mensPorId(id);
+    await garantirNumero(m);
+    let area = document.getElementById('area-recibo');
+    if (!area) { area = document.createElement('div'); area.id = 'area-recibo'; document.body.appendChild(area); }
+    area.innerHTML = htmlRecibo(m);
+    fecharModal();
+    document.body.classList.add('imprimindo-recibo');
+    document.title = `Recibo ${numRecibo(m.recibo)} - ${nomeDaMens(m)}`;
+    // No Android a impressão não bloqueia: a limpeza fica para o fim da impressão.
+    window.addEventListener('afterprint', () => { document.body.classList.remove('imprimindo-recibo'); document.title = 'Mensalidades'; }, { once: true });
+    window.print();
   },
 
   formEditarMens(id) {
@@ -478,7 +643,16 @@ const acoes = {
     const tol = parseInt(f.get('tolerancia'), 10);
     const sum = parseInt(f.get('diasSumido'), 10);
     if (!Number.isFinite(v) || v < 0) { avisar('Valor padrão inválido.'); return; }
+    // O próximo número nunca pode repetir um recibo já emitido.
+    const maiorEmitido = E.mensalidades.reduce((mx, m) => Math.max(mx, Number(m.recibo) || 0), 0);
+    let prox = parseInt(f.get('proxRecibo'), 10);
+    if (!Number.isFinite(prox) || prox < 1) prox = 1;
+    if (prox <= maiorEmitido) { prox = maiorEmitido + 1; avisar(`O recibo nº ${numRecibo(maiorEmitido)} já foi emitido; o próximo será ${numRecibo(prox)}.`); }
     Object.assign(E.config, {
+      responsavel: String(f.get('responsavel')).trim(),
+      documento: String(f.get('documento')).trim(),
+      cidade: String(f.get('cidade')).trim(),
+      proxRecibo: prox,
       diasSumido: sum >= 15 && sum <= 365 ? sum : 60,
       academia: String(f.get('academia')).trim(),
       valorPadrao: v,
@@ -897,6 +1071,13 @@ function telaConfig() {
       </div>
       <label>Considerar "sumido" após (dias sem pagar)<input name="diasSumido" type="number" min="15" max="365" value="${esc(c.diasSumido)}"></label>
       <label>Chave Pix<input name="pix" value="${esc(c.pix)}" placeholder="CNPJ, e-mail, telefone..."></label>
+      <h3 style="margin:8px 0 0">🧾 Recibos</h3>
+      <label>Responsável (quem assina)<input name="responsavel" value="${esc(c.responsavel)}" placeholder="Ex.: Michel Ebertz"></label>
+      <label>CNPJ do MEI (ou CPF)<input name="documento" inputmode="numeric" value="${esc(c.documento)}" placeholder="00.000.000/0001-00"></label>
+      <div class="linha">
+        <label>Cidade/UF<input name="cidade" value="${esc(c.cidade)}" placeholder="Chapecó/SC"></label>
+        <label>Próximo nº de recibo<input name="proxRecibo" type="number" min="1" value="${esc(c.proxRecibo)}"></label>
+      </div>
       <label>Mensagem de lembrete (antes do vencimento)<textarea name="msgLembrete">${esc(c.msgLembrete)}</textarea></label>
       <label>Mensagem de atraso<textarea name="msgAtraso">${esc(c.msgAtraso)}</textarea></label>
       <p class="ajuda">Variáveis: {nome} {nome_completo} {competencia} {valor} {vencimento} {dias} {pix} {academia}</p>
@@ -935,7 +1116,7 @@ function telaConfig() {
 
     <h2>Zona de perigo</h2>
     <button class="btn perigo cheio" onclick="acoes.apagarTudo()">Apagar todos os dados</button>
-    <p class="ajuda">Mensalidades da Academia · v5 · dados locais (IndexedDB)</p>`;
+    <p class="ajuda">Mensalidades da Academia · v6 · dados locais (IndexedDB)</p>`;
 }
 
 // ===================== Navegação =====================
