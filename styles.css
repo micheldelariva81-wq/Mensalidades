@@ -208,3 +208,5 @@ form.campos label.check input { width: 20px; height: 20px; padding: 0; flex: non
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   @page { margin: 18mm; }
 }
+
+code { word-break: break-all; }

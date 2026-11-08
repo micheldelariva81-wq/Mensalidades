@@ -73,8 +73,14 @@ function estadoInicial() {
       documento: '', // CNPJ do MEI ou CPF de quem assina
       cidade: '',
       proxRecibo: 1,
+      // Backup automático no Google Drive
+      driveUrl: '',
+      driveToken: '',
+      backupAuto: true,
     },
     ultimoBackup: null,
+    alteradoEm: null,   // última alteração dos dados
+    driveStatus: null,  // { ok, em, arquivo, versao, erro, tentativaEm }
   };
 }
 
@@ -82,7 +88,81 @@ let E = estadoInicial();
 const ui = { aba: 'painel', comp: compAtual(), filtroMes: 'todas', busca: '', filtroAlunos: 'ativos', anoRel: new Date().getFullYear() };
 
 async function persistir() {
+  E.alteradoEm = new Date().toISOString();
   await salvarEstado(E);
+  agendarBackupDrive();
+}
+
+// ===================== Backup automático no Google Drive =====================
+// O app envia o backup para um script do Google (backup-google-drive.gs) instalado na conta do usuário.
+// Content-Type text/plain evita a checagem prévia de CORS, que o Google Apps Script não aceita.
+
+let timerDrive = null;
+let enviandoDrive = false;
+
+const driveConfigurado = () => !!(E.config.driveUrl && E.config.driveToken);
+const drivePendente = () => driveConfigurado() && E.config.backupAuto && E.alteradoEm
+  && (!E.driveStatus || E.driveStatus.versao !== E.alteradoEm);
+
+function pacoteBackup() {
+  return { app: 'mensalidades-academia', exportadoEm: new Date().toISOString(), estado: E };
+}
+
+function agendarBackupDrive(ms = 8000) {
+  if (!driveConfigurado() || !E.config.backupAuto) return;
+  clearTimeout(timerDrive);
+  timerDrive = setTimeout(() => enviarDrive(false), ms);
+}
+
+async function enviarDrive(manual) {
+  if (!driveConfigurado()) { if (manual) avisar('Configure o backup no Google Drive primeiro.'); return false; }
+  if (!navigator.onLine) { if (manual) avisar('Sem internet. O backup vai quando a conexão voltar.'); return false; }
+  if (enviandoDrive) { agendarBackupDrive(3000); return false; }
+  enviandoDrive = true;
+  const versao = E.alteradoEm;
+  let ok = false;
+  try {
+    const resp = await fetch(E.config.driveUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ token: E.config.driveToken, backup: pacoteBackup() }),
+    });
+    const r = await resp.json();
+    if (!r.ok) throw new Error(r.erro || 'resposta inválida');
+    E.driveStatus = { ok: true, em: new Date().toISOString(), arquivo: r.arquivo, versao };
+    E.ultimoBackup = hoje();
+    ok = true;
+    if (manual) avisar('Backup enviado ao Google Drive.');
+  } catch (e) {
+    const erro = e instanceof SyntaxError || e instanceof TypeError ? 'não foi possível falar com o script (confira a URL e a implantação)' : e.message;
+    E.driveStatus = { ...(E.driveStatus || {}), ok: false, erro, tentativaEm: new Date().toISOString() };
+    if (manual) avisar('Falha no backup: ' + erro);
+  } finally {
+    enviandoDrive = false;
+  }
+  await salvarEstado(E); // sem persistir(), para não gerar outro envio
+  atualizarStatusDrive();
+  return ok;
+}
+
+function fmtDataHora(iso) {
+  const d = new Date(iso);
+  return `${fmtData(isoDe(d))} às ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function statusDriveHTML() {
+  if (!driveConfigurado()) return '⚪ Não configurado.';
+  const s = E.driveStatus;
+  let t = s && s.em ? `✅ Último envio: <b>${fmtDataHora(s.em)}</b>` : '⏳ Ainda não enviado.';
+  if (s && s.ok === false) t += `<br>⚠️ Última tentativa falhou (${fmtDataHora(s.tentativaEm)}): ${esc(s.erro)}`;
+  else if (drivePendente()) t += '<br>⏳ Há alterações aguardando envio.';
+  if (!E.config.backupAuto) t += '<br>Envio automático desligado.';
+  return t;
+}
+
+function atualizarStatusDrive() {
+  const el = document.getElementById('drive-status');
+  if (el) el.innerHTML = statusDriveHTML();
 }
 
 const alunoPorId = (id) => E.alunos.find((a) => a.id === id);
@@ -692,18 +772,43 @@ const acoes = {
     const arq = input.files[0];
     input.value = '';
     if (!arq) return;
+    let obj;
+    try { obj = JSON.parse(await arq.text()); } catch { obj = null; }
+    if (!(await aplicarBackup(obj))) return;
+  },
+
+  async salvarDrive(ev) {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const url = String(f.get('driveUrl')).trim();
+    const token = String(f.get('driveToken')).trim();
+    if (url && !/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) {
+      avisar('A URL deve começar com https://script.google.com/macros/s/ e terminar em /exec.');
+      return;
+    }
+    if (url && !token) { avisar('Informe o código secreto (o mesmo do script).'); return; }
+    Object.assign(E.config, { driveUrl: url, driveToken: token, backupAuto: f.get('backupAuto') === 'on' });
+    E.driveStatus = null;
+    await salvarEstado(E);
+    render();
+    if (url) await enviarDrive(true);
+    else avisar('Backup no Google Drive desligado.');
+  },
+
+  async enviarDriveAgora() {
+    await enviarDrive(true);
+  },
+
+  async restaurarDrive() {
+    if (!driveConfigurado()) { avisar('Configure o backup no Google Drive primeiro.'); return; }
+    if (!navigator.onLine) { avisar('Sem internet.'); return; }
     try {
-      const obj = JSON.parse(await arq.text());
-      const est = obj.estado;
-      if (obj.app !== 'mensalidades-academia' || !est || !Array.isArray(est.alunos) || !Array.isArray(est.mensalidades)) throw new Error('formato');
-      if (!confirm(`Restaurar backup de ${fmtData(String(obj.exportadoEm).slice(0, 10))}?\n${est.alunos.length} alunos e ${est.mensalidades.length} mensalidades.\n\nOs dados atuais serão SUBSTITUÍDOS.`)) return;
-      E = { ...estadoInicial(), ...est, config: { ...estadoInicial().config, ...est.config } };
-      gerarPendentes();
-      await persistir();
-      avisar('Backup restaurado.');
-      render();
-    } catch {
-      avisar('Arquivo inválido. Use um backup gerado por este app.');
+      const resp = await fetch(`${E.config.driveUrl}?token=${encodeURIComponent(E.config.driveToken)}`);
+      const r = await resp.json();
+      if (!r.ok) throw new Error(r.erro);
+      await aplicarBackup(r.backup);
+    } catch (e) {
+      avisar('Não foi possível baixar do Drive: ' + (e.message || 'erro de conexão'));
     }
   },
 
@@ -769,6 +874,26 @@ const acoes = {
   },
 };
 
+// Substitui os dados pelos do backup (arquivo ou Drive). Mantém a configuração do Drive deste celular.
+async function aplicarBackup(obj) {
+  const est = obj && obj.estado;
+  if (!obj || obj.app !== 'mensalidades-academia' || !est || !Array.isArray(est.alunos) || !Array.isArray(est.mensalidades)) {
+    avisar('Backup inválido. Use um backup gerado por este app.');
+    return false;
+  }
+  if (!confirm(`Restaurar backup de ${fmtDataHora(obj.exportadoEm)}?\n${est.alunos.length} alunos e ${est.mensalidades.length} mensalidades.\n\nOs dados atuais deste celular serão SUBSTITUÍDOS.`)) return false;
+  const { driveUrl, driveToken, backupAuto } = E.config;
+  const driveStatus = E.driveStatus;
+  E = { ...estadoInicial(), ...est, config: { ...estadoInicial().config, ...est.config } };
+  if (driveUrl) Object.assign(E.config, { driveUrl, driveToken, backupAuto });
+  E.driveStatus = driveStatus;
+  gerarPendentes();
+  await persistir();
+  avisar('Backup restaurado.');
+  render();
+  return true;
+}
+
 function baixarArquivo(arquivo) {
   const url = URL.createObjectURL(arquivo);
   const a = document.createElement('a');
@@ -829,10 +954,15 @@ function telaPainel() {
     .filter((m) => m.status === 'aberta' && m.venc >= h && m.venc <= somarDias(h, 7))
     .sort((x, y) => x.venc.localeCompare(y.venc));
 
-  const semBackup = !E.ultimoBackup || diasEntre(E.ultimoBackup, h) >= 7;
+  // Aviso de backup: com Drive automático, só avisa se estiver falhando há 2 dias ou mais.
+  const ds = E.driveStatus;
+  const autoAtivo = driveConfigurado() && E.config.backupAuto;
+  const driveFalhando = autoAtivo && ds && ds.ok === false && (!ds.em || diasEntre(isoDe(new Date(ds.em)), h) >= 2);
+  const semBackup = !autoAtivo && (!E.ultimoBackup || diasEntre(E.ultimoBackup, h) >= 7);
 
   return `
-    ${semBackup && E.alunos.length ? `<div class="faixa-aviso"><span>${E.ultimoBackup ? `Último backup em ${fmtData(E.ultimoBackup)}.` : 'Você ainda não fez backup.'} Os dados ficam só neste celular.</span><button class="btn pequeno" onclick="acoes.backup()">Backup</button></div>` : ''}
+    ${semBackup && E.alunos.length ? `<div class="faixa-aviso"><span>${E.ultimoBackup ? `Último backup em ${fmtData(E.ultimoBackup)}.` : 'Você ainda não fez backup.'} Ative o backup automático no Google Drive em Ajustes.</span><button class="btn pequeno" onclick="acoes.backup()">Backup</button></div>` : ''}
+    ${driveFalhando && E.alunos.length ? `<div class="faixa-aviso"><span>⚠️ O backup automático no Drive está falhando${ds.em ? ` desde ${fmtData(isoDe(new Date(ds.em)))}` : ''}: ${esc(ds.erro)}</span><button class="btn pequeno" onclick="acoes.enviarDriveAgora()">Tentar</button></div>` : ''}
     ${!E.alunos.length ? `<div class="cartao largo"><b>Comece cadastrando seus alunos.</b><p class="detalhe">Toque em "+ Aluno" no topo, ou importe uma lista em Ajustes.</p></div>` : ''}
     <div class="cartoes">
       ${cartao('Recebido no mês', brl(totRecebido), `${recebidoMes.length} pagamento(s)`, 'ok')}
@@ -1087,13 +1217,31 @@ function telaConfig() {
       </div>
     </form>
 
-    <h2>Backup</h2>
+    <h2>☁️ Backup automático no Google Drive</h2>
     <div class="cartao">
-      <p class="detalhe" style="margin-top:0">Os dados ficam só neste celular. Faça backup toda semana e guarde o arquivo no Google Drive ou no seu WhatsApp.<br>
+      <p class="detalhe" id="drive-status" style="margin-top:0">${statusDriveHTML()}</p>
+      <form class="campos" onsubmit="acoes.salvarDrive(event)">
+        <label>URL do script do Google (termina em /exec)<input name="driveUrl" type="url" value="${esc(c.driveUrl)}" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off"></label>
+        <label>Código secreto (o mesmo do script)<input name="driveToken" value="${esc(c.driveToken)}" autocomplete="off"></label>
+        <label style="flex-direction:row;align-items:center;gap:8px"><input name="backupAuto" type="checkbox" ${c.backupAuto ? 'checked' : ''}> Enviar sozinho a cada alteração</label>
+        <div class="botoes">
+          <button type="submit" class="btn ok">Salvar e testar</button>
+        </div>
+      </form>
+      ${driveConfigurado() ? `<div class="botoes">
+        <button class="btn" onclick="acoes.enviarDriveAgora()">Enviar agora</button>
+        <button class="btn secundario" onclick="acoes.restaurarDrive()">Restaurar do Drive</button>
+      </div>` : ''}
+      <p class="ajuda">A cópia vai para a pasta "Backup Mensalidades Academia" do seu Drive (uma por dia, guardadas por 90 dias). Sem internet, o envio acontece quando a conexão voltar. Como instalar o script: veja o LEIA-ME.</p>
+    </div>
+
+    <h2>Backup manual (arquivo)</h2>
+    <div class="cartao">
+      <p class="detalhe" style="margin-top:0">Gera um arquivo para guardar onde quiser. Útil como reserva.<br>
       Último backup: <b>${E.ultimoBackup ? fmtData(E.ultimoBackup) : 'nunca'}</b></p>
       <div class="botoes">
         <button class="btn" onclick="acoes.backup()">Fazer backup</button>
-        <button class="btn secundario" onclick="document.getElementById('in-restaurar').click()">Restaurar</button>
+        <button class="btn secundario" onclick="document.getElementById('in-restaurar').click()">Restaurar arquivo</button>
       </div>
       <input id="in-restaurar" type="file" accept=".json,application/json" hidden onchange="acoes.restaurar(this)">
     </div>
@@ -1116,7 +1264,7 @@ function telaConfig() {
 
     <h2>Zona de perigo</h2>
     <button class="btn perigo cheio" onclick="acoes.apagarTudo()">Apagar todos os dados</button>
-    <p class="ajuda">Mensalidades da Academia · v6 · dados locais (IndexedDB)</p>`;
+    <p class="ajuda">Mensalidades da Academia · v7 · dados locais + backup no Google Drive</p>`;
 }
 
 // ===================== Navegação =====================
@@ -1148,10 +1296,18 @@ document.getElementById('btn-novo-aluno').addEventListener('click', () => acoes.
 
 // Ao voltar para o app (ex.: depois do WhatsApp), recalcula datas e gera meses novos.
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState !== 'visible') return;
+  // Ao sair do app, tenta enviar na hora o que estiver pendente.
+  if (document.visibilityState !== 'visible') {
+    if (drivePendente()) { clearTimeout(timerDrive); enviarDrive(false); }
+    return;
+  }
   if (gerarPendentes()) await persistir();
+  else if (drivePendente()) agendarBackupDrive(2000);
   if (!modal.open) render();
 });
+
+// Internet voltou: envia o que ficou pendente.
+window.addEventListener('online', () => { if (drivePendente()) agendarBackupDrive(2000); });
 
 async function iniciar() {
   try {
@@ -1162,6 +1318,7 @@ async function iniciar() {
   }
   if (gerarPendentes()) await persistir();
   else if (!E.config.ultimaCompGerada) await persistir();
+  if (drivePendente()) agendarBackupDrive(3000);
   render();
   pedirArmazenamentoPersistente();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
