@@ -1,48 +1,44 @@
 'use strict';
-// © 2026 Michel Ebertz. Todos os direitos reservados. Proibido copiar, reproduzir, modificar ou distribuir sem autorização por escrito (Leis 9.610/1998 e 9.609/1998).
 
 // ===================== Utilidades =====================
 
-const VERSAO_APP = 'v5';
-const P = PARAMETROS;
-
 const fmtMoeda = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const brl = (v) => fmtMoeda.format(Number(v) || 0);
-const brl0 = (v) => Calc.brl(v);
-const pct = (v, c = 1) => Calc.pct(v, c);
+const numBR = (v) => (Number(v) || 0).toFixed(2).replace('.', ',');
 
-const pad = (x) => String(x).padStart(2, '0');
+const pad = (n) => String(n).padStart(2, '0');
 const isoDe = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const dataDe = (iso) => { const [a, m, d] = iso.split('-').map(Number); return new Date(a, m - 1, d); };
 const hoje = () => isoDe(new Date());
+const somarDias = (iso, n) => { const d = dataDe(iso); d.setDate(d.getDate() + n); return isoDe(d); };
+const diasEntre = (de, ate) => Math.round((dataDe(ate) - dataDe(de)) / 86400000);
 const fmtData = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
-function somarMeses(iso, m) { const [a, mm, d] = iso.split('-').map(Number); return isoDe(new Date(a, mm - 1 + m, d)); }
+const fmtDiaMes = (iso) => (iso ? fmtData(iso).slice(0, 5) : '');
 
-// Aceita "1.234,56", "1234,56", "R$ 1.234" ou número. Vazio vira ''.
+const compDe = (iso) => iso.slice(0, 7);
+const compAtual = () => compDe(hoje());
+const somarComp = (comp, n) => { const [a, m] = comp.split('-').map(Number); const d = new Date(a, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+const fmtComp = (comp) => { const [a, m] = comp.split('-'); return `${m}/${a}`; };
+const nomeMes = (comp) => { const [a, m] = comp.split('-').map(Number); const t = new Date(a, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }); return t.charAt(0).toUpperCase() + t.slice(1); };
+const mesCurto = (comp) => { const [a, m] = comp.split('-').map(Number); return new Date(a, m - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''); };
+
+function vencimentoDe(comp, dia) {
+  const [a, m] = comp.split('-').map(Number);
+  const ultimo = new Date(a, m, 0).getDate();
+  return `${comp}-${pad(Math.min(Math.max(1, dia), ultimo))}`;
+}
+
 function lerValor(txt) {
   if (typeof txt === 'number') return txt;
-  let s = String(txt || '').replace(/[R$\s%]/g, '');
-  if (s === '') return '';
+  let s = String(txt || '').replace(/[R$\s]/g, '');
   if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
-  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
   const v = parseFloat(s);
-  return Number.isFinite(v) ? Math.round(v * 100) / 100 : '';
+  return Number.isFinite(v) ? Math.round(v * 100) / 100 : NaN;
 }
-const mostrarNum = (v) => (v === '' || v === null || v === undefined ? '' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 2 }));
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const primeiroNome = (nome) => String(nome || '').trim().split(/\s+/)[0] || '';
-
-function getPath(obj, path) { return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj); }
-function setPath(obj, path, val) {
-  const ks = path.split('.');
-  let o = obj;
-  for (let i = 0; i < ks.length - 1; i++) {
-    if (o[ks[i]] == null) o[ks[i]] = /^\d+$/.test(ks[i + 1]) ? [] : {};
-    o = o[ks[i]];
-  }
-  o[ks[ks.length - 1]] = val;
-}
 
 function avisar(msg) {
   const el = document.getElementById('aviso');
@@ -52,1120 +48,941 @@ function avisar(msg) {
   avisar.t = setTimeout(() => { el.hidden = true; }, 2600);
 }
 
-const modal = () => document.getElementById('modal');
-function abrirModal(html) { document.getElementById('modal-corpo').innerHTML = html; modal().showModal(); }
-function fecharModal() { modal().close(); }
-
-async function hashPin(pin) {
-  const txt = 'pf:' + pin;
-  if (crypto.subtle) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
-    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
-  }
-  return btoa(txt);
-}
-
 // ===================== Estado =====================
 
-function novoPerfil(nome = '') {
-  return {
-    id: uid(), criadoEm: hoje(), atualizadoEm: hoje(), etapasFeitas: {}, historico: [],
-    pessoal: { nome, idade: '', estadoCivil: 'solteiro', regimeBens: 'parcial', uf: 'SC', profissao: '', tipoRenda: 'clt', dependentes: [] },
-    renda: { liquida: '', outras: '', investeMensal: '', brutaAnual: '' },
-    despesas: { moradia: '', alimentacao: '', transporte: '', saude: '', educacao: '', lazer: '', outras: '' },
-    patrimonio: { reserva: '', rendaFixa: '', acoes: '', fiis: '', exterior: '', cripto: '', pgbl: '', vgbl: '', fgts: '', imoveis: '', veiculos: '', empresa: '', outros: '' },
-    dividas: [],
-    protecao: { seguroVida: '', seguroInvalidez: false, planoSaude: false },
-    objetivos: [],
-    aposentadoria: { idadeDesejada: '', rendaDesejada: '', inssEstimado: '', outrasRendas: '', aporteMensal: '' },
-    suitability: { respostas: [] },
-    tributario: { declaracao: 'nao_sei', contribuiINSS: true, despesasMedicas: '', despesasEducacao: '', aportePGBLAnual: '' },
-    sucessao: { testamento: false, holding: false, empresaFamiliar: false, familiaRecomposta: false },
-  };
-}
+const MSG_LEMBRETE = 'Olá, {nome}! Passando para lembrar que sua mensalidade de {competencia}, no valor de {valor}, vence em {vencimento}. Pix: {pix}. Oss!';
+const MSG_ATRASO = 'Olá, {nome}, tudo bem? Consta em aberto a mensalidade de {competencia} ({valor}), vencida em {vencimento}. Se já pagou, desconsidere. Pix: {pix}. Obrigado!';
 
 function estadoInicial() {
-  const p = novoPerfil();
-  return { versao: 1, perfis: [p], ativoId: p.id, config: { consentiu: false, modoPlanejador: false, pinHash: '' } };
-}
-
-let estado = null;
-let aba = 'inicio';
-let pedidoInstalar = null; // evento do Chrome que permite instalar o app com um toque
-const instalado = () => window.matchMedia('(display-mode: standalone)').matches;
-const diasDesde = (iso) => Math.floor((new Date(hoje()) - new Date(iso)) / 86400000);
-let etapaAberta = null;
-let sim = {};
-
-const perfil = () => estado.perfis.find((p) => p.id === estado.ativoId) || estado.perfis[0];
-const planejador = () => !!estado.config.modoPlanejador;
-
-// ---------- Licença do Modo Planejador ----------
-// O código é assinado por Michel (licencas/gerar-licenca.js). O app só confere a assinatura
-// com a chave pública: sem a chave privada, ninguém cria nem altera um código.
-
-const bytesDeB64url = (s) => {
-  s = s.replace(/-/g, '+').replace(/_/g, '/');
-  while (s.length % 4) s += '=';
-  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-};
-
-async function verificarCodigo(codigo) {
-  const partes = String(codigo || '').replace(/\s+/g, '').split('.');
-  if (partes.length !== 3 || partes[0] !== 'PF1' || !crypto.subtle) return null;
-  try {
-    const chave = await crypto.subtle.importKey('jwk', { ...P.licenca.chavePublica, ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-    const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, chave, bytesDeB64url(partes[2]), new TextEncoder().encode(partes[1]));
-    if (!ok) return null;
-    const d = JSON.parse(new TextDecoder().decode(bytesDeB64url(partes[1])));
-    if (!d.n || !/^\d{4}-\d{2}-\d{2}$/.test(d.v)) return null;
-    return { codigo: partes.join('.'), nome: d.n, validade: d.v, emitido: d.e };
-  } catch {
-    return null;
-  }
-}
-
-const vitalicia = (lic) => lic && lic.validade === '9999-12-31';
-const fmtValidade = (lic) => (vitalicia(lic) ? 'vitalícia' : `até ${fmtData(lic.validade)}`);
-// Licença em vigor (vale até o fim do dia da validade).
-function licencaValida() {
-  const lic = estado && estado.config.licenca;
-  return lic && hoje() <= lic.validade ? lic : null;
-}
-const diasParaVencer = (lic) => Math.round((new Date(lic.validade) - new Date(hoje())) / 86400000);
-
-// Título e WhatsApp valem só para o dono da licença que os cadastrou (troca de licença = dados limpos).
-function dadosAssessor(lic) {
-  const c = (estado && estado.config.assessor) || {};
-  return lic && c.dono === lic.nome ? c : {};
-}
-
-// Quem atende neste celular: o assessor da licença em vigor (nome travado na licença; título e
-// WhatsApp configuráveis). Sem licença válida, o atendimento volta para o padrão (Michel).
-function assessor() {
-  const lic = licencaValida();
-  if (!lic) return { ...P.planejador };
-  const c = dadosAssessor(lic);
-  const ehAutor = lic.nome === P.planejador.nome;
   return {
-    nome: lic.nome,
-    titulo: c.titulo || P.planejador.titulo,
-    whatsapp: c.whatsapp || (ehAutor ? P.planejador.whatsapp : ''),
+    versao: 1,
+    alunos: [],
+    mensalidades: [],
+    config: {
+      academia: '',
+      valorPadrao: 170,
+      tolerancia: 3,
+      pix: '',
+      msgLembrete: MSG_LEMBRETE,
+      msgAtraso: MSG_ATRASO,
+      tetoMei: 81000,
+      diasSumido: 60,
+      ultimaCompGerada: null,
+    },
+    ultimoBackup: null,
   };
 }
-// Se o assessor ainda não cadastrou o WhatsApp, o contato vai para Michel (e a mensagem também).
-const whatsAtendimento = () => assessor().whatsapp || P.planejador.whatsapp;
-const nomeAtendimento = () => (assessor().whatsapp ? assessor().nome : P.planejador.nome);
 
-// Crédito fixo da metodologia + responsável pelo atendimento.
-function creditos() {
-  const a = assessor();
-  if (a.nome === P.planejador.nome) return `Metodologia e atendimento: ${P.planejador.nome}, ${a.titulo}`;
-  return `Metodologia: ${P.planejador.nome} · Atendimento: ${a.nome}, ${a.titulo}`;
+let E = estadoInicial();
+const ui = { aba: 'painel', comp: compAtual(), filtroMes: 'todas', busca: '', filtroAlunos: 'ativos', anoRel: new Date().getFullYear() };
+
+async function persistir() {
+  await salvarEstado(E);
 }
 
-// "(49) 99999-9999" vira "5549999999999". Aceita também número já com 55.
-function normalizarWhats(txt) {
-  const d = String(txt || '').replace(/\D/g, '');
-  if (!d) return '';
-  if (d.length === 10 || d.length === 11) return '55' + d;
-  if ((d.length === 12 || d.length === 13) && d.startsWith('55')) return d;
-  return null;
+const alunoPorId = (id) => E.alunos.find((a) => a.id === id);
+const mensPorId = (id) => E.mensalidades.find((m) => m.id === id);
+// Nome do aluno da mensalidade: do cadastro ou, se o aluno foi excluído, o nome gravado no pagamento.
+const nomeDaMens = (m) => { const a = alunoPorId(m.alunoId); return a ? a.nome : (m.alunoNome || 'Aluno removido'); };
+
+// ===================== Regras de negócio =====================
+
+function situacao(m) {
+  if (m.status === 'aberta' && hoje() > somarDias(m.venc, Number(E.config.tolerancia) || 0)) return 'atrasada';
+  return m.status;
 }
-const mostrarWhats = (d) => (d && d.length >= 12 ? `(${d.slice(2, 4)}) ${d.slice(4, -4)}-${d.slice(-4)}` : '');
+const diasAtraso = (m) => Math.max(0, diasEntre(m.venc, hoje()));
+const ROTULO = { paga: 'Paga', aberta: 'Em aberto', atrasada: 'Atrasada', cancelada: 'Cancelada' };
 
-async function salvar() {
-  try { await salvarEstado(estado); } catch (e) { avisar('Não foi possível salvar: ' + e.message); }
-}
-
-// ===================== Etapas do questionário =====================
-
-const UFS = 'AC AL AM AP BA CE DF ES GO MA MG MS MT PA PB PE PI PR RJ RN RO RR RS SC SE SP TO'.split(' ');
-const op = (pares) => pares.map(([v, r]) => [v, r]);
-
-const ETAPAS = [
-  {
-    id: 'sobre', icone: '👤', titulo: 'Sobre você', resumo: 'Idade, família e trabalho',
-    campos: [
-      { k: 'pessoal.nome', l: 'Seu nome', t: 'texto' },
-      { k: 'pessoal.idade', l: 'Idade', t: 'int' },
-      { k: 'pessoal.estadoCivil', l: 'Estado civil', t: 'sel', re: true, op: op([['solteiro', 'Solteiro(a)'], ['casado', 'Casado(a)'], ['uniao', 'União estável'], ['divorciado', 'Divorciado(a)'], ['viuvo', 'Viúvo(a)']]) },
-      { k: 'pessoal.regimeBens', l: 'Regime de bens', t: 'sel', se: (pf) => ['casado', 'uniao'].includes(pf.pessoal.estadoCivil), op: op([['parcial', 'Comunhão parcial (o mais comum)'], ['universal', 'Comunhão universal'], ['separacao', 'Separação total'], ['participacao', 'Participação final nos aquestos']]) },
-      { k: 'pessoal.uf', l: 'Estado onde mora', t: 'sel', op: UFS.map((u) => [u, u]) },
-      { k: 'pessoal.profissao', l: 'Profissão', t: 'texto' },
-      { k: 'pessoal.tipoRenda', l: 'Como você ganha a sua renda?', t: 'sel', op: op([['clt', 'Carteira assinada (CLT)'], ['servidor', 'Servidor público'], ['pj', 'PJ / prestador de serviço'], ['autonomo', 'Autônomo / profissional liberal'], ['empresario', 'Empresário'], ['aposentado', 'Aposentado']]) },
-    ],
-    repetidor: { k: 'pessoal.dependentes', titulo: 'Dependentes (quem depende de você financeiramente)', item: 'Dependente', novo: () => ({ parentesco: 'filho', idade: '' }),
-      campos: [{ k: 'parentesco', l: 'Quem é', t: 'sel', op: op([['filho', 'Filho(a)'], ['conjuge', 'Cônjuge'], ['pais', 'Pai/mãe'], ['outro', 'Outro']]) }, { k: 'idade', l: 'Idade', t: 'int' }] },
-  },
-  {
-    id: 'renda', icone: '💵', titulo: 'Renda e gastos', resumo: 'Quanto entra e quanto sai por mês',
-    campos: [
-      { k: 'renda.liquida', l: 'Renda líquida mensal da família', t: 'moeda', ajuda: 'O que cai na conta, já sem INSS e IR. Some o salário do casal, se dividem as contas.' },
-      { k: 'renda.outras', l: 'Outras rendas por mês (aluguel, pensão, extras)', t: 'moeda' },
-      { k: 'renda.investeMensal', l: 'Quanto você investe por mês hoje?', t: 'moeda' },
-      { k: 'renda.brutaAnual', l: 'Sua renda bruta tributável por ano', t: 'moeda', ajuda: 'Para o cálculo de IR. CLT: salário bruto × 13,33 (inclui 13º e 1/3 de férias). PJ/empresário: pró-labore do ano.' },
-      { sec: 'Gastos mensais (sem as parcelas de dívidas)' },
-      { k: 'despesas.moradia', l: 'Moradia (aluguel, condomínio, luz, água, internet)', t: 'moeda' },
-      { k: 'despesas.alimentacao', l: 'Alimentação (mercado e refeições)', t: 'moeda' },
-      { k: 'despesas.transporte', l: 'Transporte (combustível, seguro do carro, app)', t: 'moeda' },
-      { k: 'despesas.saude', l: 'Saúde (plano, remédios)', t: 'moeda' },
-      { k: 'despesas.educacao', l: 'Educação (escola, cursos)', t: 'moeda' },
-      { k: 'despesas.lazer', l: 'Lazer e assinaturas', t: 'moeda' },
-      { k: 'despesas.outras', l: 'Outros gastos', t: 'moeda' },
-    ],
-  },
-  {
-    id: 'patrimonio', icone: '🏦', titulo: 'Patrimônio', resumo: 'O que você já tem',
-    campos: [
-      { sec: 'Investimentos' },
-      { k: 'patrimonio.reserva', l: 'Dinheiro com liquidez diária (reserva)', t: 'moeda', ajuda: 'Poupança, CDB de liquidez diária, título público pós-fixado, conta remunerada.' },
-      { k: 'patrimonio.rendaFixa', l: 'Outras aplicações de renda fixa', t: 'moeda', ajuda: 'CDB, LCI/LCA, títulos públicos, debêntures e fundos de renda fixa que não são a reserva.' },
-      { k: 'patrimonio.acoes', l: 'Ações e fundos de ações', t: 'moeda' },
-      { k: 'patrimonio.fiis', l: 'Fundos imobiliários', t: 'moeda' },
-      { k: 'patrimonio.exterior', l: 'Investimentos no exterior', t: 'moeda' },
-      { k: 'patrimonio.cripto', l: 'Criptoativos', t: 'moeda' },
-      { k: 'patrimonio.pgbl', l: 'Previdência PGBL', t: 'moeda' },
-      { k: 'patrimonio.vgbl', l: 'Previdência VGBL', t: 'moeda' },
-      { k: 'patrimonio.fgts', l: 'Saldo do FGTS', t: 'moeda' },
-      { sec: 'Bens' },
-      { k: 'patrimonio.imoveis', l: 'Imóveis (valor de mercado)', t: 'moeda' },
-      { k: 'patrimonio.veiculos', l: 'Veículos', t: 'moeda' },
-      { k: 'patrimonio.empresa', l: 'Participação em empresa', t: 'moeda' },
-      { k: 'patrimonio.outros', l: 'Outros bens', t: 'moeda' },
-    ],
-  },
-  {
-    id: 'dividas', icone: '💳', titulo: 'Dívidas', resumo: 'Cartão, empréstimos e financiamentos',
-    campos: [],
-    vazioRep: 'Sem dívidas? Ótimo. Toque em "Salvar e continuar".',
-    repetidor: { k: 'dividas', titulo: 'Suas dívidas', item: 'Dívida', novo: () => ({ descricao: '', saldo: '', taxaMes: '', parcela: '' }),
-      campos: [{ k: 'descricao', l: 'Qual dívida', t: 'texto' }, { k: 'saldo', l: 'Quanto falta pagar', t: 'moeda' }, { k: 'taxaMes', l: 'Juros ao mês (%)', t: 'pct', ajuda: 'Cartão e cheque especial: 8% a 15%. Consignado: cerca de 1,8%. Imobiliário: cerca de 0,9%.' }, { k: 'parcela', l: 'Parcela mensal', t: 'moeda' }] },
-  },
-  {
-    id: 'protecao', icone: '🛡️', titulo: 'Proteção', resumo: 'Seguros e plano de saúde',
-    campos: [
-      { k: 'protecao.seguroVida', l: 'Capital do seu seguro de vida (somando todos)', t: 'moeda', ajuda: 'Valor que a família recebe. Se não tem, deixe em branco.' },
-      { k: 'protecao.seguroInvalidez', l: 'Tenho cobertura para invalidez ou doença grave', t: 'sim' },
-      { k: 'protecao.planoSaude', l: 'Tenho plano de saúde', t: 'sim' },
-    ],
-  },
-  {
-    id: 'objetivos', icone: '🎯', titulo: 'Objetivos', resumo: 'Seus sonhos com valor e prazo',
-    campos: [],
-    vazioRep: 'Exemplos: comprar um imóvel, trocar de carro, faculdade dos filhos, uma viagem. A aposentadoria tem etapa própria.',
-    repetidor: { k: 'objetivos', titulo: 'Seus objetivos', item: 'Objetivo', novo: () => ({ nome: '', valor: '', anos: '', guardado: '', prioridade: 'media' }),
-      campos: [{ k: 'nome', l: 'Objetivo', t: 'texto' }, { k: 'valor', l: 'Quanto custa (em valores de hoje)', t: 'moeda' }, { k: 'anos', l: 'Daqui a quantos anos', t: 'int' }, { k: 'guardado', l: 'Quanto já guardou para ele', t: 'moeda' }, { k: 'prioridade', l: 'Prioridade', t: 'sel', op: op([['alta', 'Alta'], ['media', 'Média'], ['baixa', 'Baixa']]) }] },
-  },
-  {
-    id: 'aposentadoria', icone: '🏖️', titulo: 'Aposentadoria', resumo: 'Quando e com quanto',
-    campos: [
-      { k: 'aposentadoria.idadeDesejada', l: 'Com quantos anos quer parar de depender do trabalho?', t: 'int' },
-      { k: 'aposentadoria.rendaDesejada', l: 'Renda mensal desejada (em valores de hoje)', t: 'moeda', ajuda: 'Em branco, usamos o seu custo de vida atual.' },
-      { k: 'aposentadoria.inssEstimado', l: 'Aposentadoria do INSS que espera receber (por mês)', t: 'moeda', ajuda: `Consulte no app Meu INSS. O teto em 2026 é ${brl(P.inss.teto)}.` },
-      { k: 'aposentadoria.outrasRendas', l: 'Outras rendas na aposentadoria (aluguéis etc.)', t: 'moeda' },
-      { k: 'aposentadoria.aporteMensal', l: 'Quanto por mês vai para a aposentadoria hoje?', t: 'moeda', ajuda: 'Em branco, usamos o que sobra do seu aporte depois dos outros objetivos.' },
-    ],
-  },
-  { id: 'perfil', icone: '🧭', titulo: 'Perfil de investidor', resumo: '8 perguntas rápidas', perfil: true, campos: [] },
-  {
-    id: 'impostos', icone: '🧾', titulo: 'Imposto de renda', resumo: 'Declaração e previdência',
-    campos: [
-      { k: 'tributario.declaracao', l: 'Como você declara o IR?', t: 'sel', op: op([['nao_sei', 'Não sei'], ['simplificada', 'Simplificada'], ['completa', 'Completa'], ['nao_declara', 'Não declaro']]) },
-      { k: 'tributario.contribuiINSS', l: 'Contribuo para o INSS ou regime próprio', t: 'sim' },
-      { k: 'tributario.despesasMedicas', l: 'Despesas médicas por ano (você e dependentes)', t: 'moeda' },
-      { k: 'tributario.despesasEducacao', l: 'Despesas com educação formal por ano', t: 'moeda', ajuda: `Limite de dedução: ${brl(P.irAnual.educacaoLimitePessoa)} por pessoa.` },
-      { k: 'tributario.aportePGBLAnual', l: 'Quanto aplica em PGBL por ano', t: 'moeda' },
-    ],
-  },
-  {
-    id: 'sucessao', icone: '🌳', titulo: 'Sucessão', resumo: 'Proteger quem fica',
-    campos: [
-      { k: 'sucessao.testamento', l: 'Tenho testamento', t: 'sim' },
-      { k: 'sucessao.holding', l: 'Tenho holding patrimonial', t: 'sim' },
-      { k: 'sucessao.empresaFamiliar', l: 'Tenho empresa familiar', t: 'sim' },
-      { k: 'sucessao.familiaRecomposta', l: 'Tenho filhos de mais de um relacionamento', t: 'sim' },
-    ],
-  },
-];
-
-// ===================== Campos =====================
-
-function campoHtml(c, valor, chave) {
-  const k = esc(chave);
-  const ajuda = c.ajuda ? `<span class="ajuda">${esc(c.ajuda)}</span>` : '';
-  if (c.t === 'sim') {
-    return `<label class="check"><input type="checkbox" data-k="${k}" data-t="sim" ${valor ? 'checked' : ''}> ${esc(c.l)}</label>`;
-  }
-  if (c.t === 'sel') {
-    const ops = c.op.map(([v, r]) => `<option value="${esc(v)}" ${String(valor) === String(v) ? 'selected' : ''}>${esc(r)}</option>`).join('');
-    return `<label>${esc(c.l)}<select data-k="${k}" data-t="sel" ${c.re ? 'data-re="1"' : ''}>${ops}</select>${ajuda}</label>`;
-  }
-  const modo = c.t === 'int' ? 'numeric' : c.t === 'texto' ? 'text' : 'decimal';
-  const ph = c.t === 'moeda' ? 'R$ 0' : c.t === 'pct' ? '0,0' : '';
-  const v = c.t === 'texto' ? valor ?? '' : mostrarNum(valor);
-  return `<label>${esc(c.l)}<input type="text" inputmode="${modo}" data-k="${k}" data-t="${c.t}" value="${esc(v)}" placeholder="${ph}" autocomplete="off">${ajuda}</label>`;
+function inicioAluno(a) {
+  const c1 = compDe(a.matricula || a.criadoEm);
+  const c2 = compDe(a.criadoEm);
+  return c1 > c2 ? c1 : c2;
 }
 
-function lerCampo(el) {
-  const t = el.dataset.t;
-  if (t === 'sim') return el.checked;
-  if (t === 'sel' || t === 'texto') return el.value;
-  if (t === 'int') { const v = lerValor(el.value); return v === '' ? '' : Math.round(v); }
-  return lerValor(el.value);
+// Cria a mensalidade do aluno na competência, se ainda não existir.
+function gerarParaAluno(a, comp) {
+  if (!a.ativo || comp < inicioAluno(a)) return false;
+  if (E.mensalidades.some((m) => m.alunoId === a.id && m.comp === comp)) return false;
+  E.mensalidades.push({
+    id: uid(), alunoId: a.id, comp, venc: vencimentoDe(comp, Number(a.diaVenc) || 10),
+    valor: Number(a.valor) || Number(E.config.valorPadrao) || 0,
+    status: 'aberta', dataPag: null, valorPago: null, forma: null, ultimoAviso: null,
+  });
+  return true;
+}
+
+function gerarCompetencia(comp) {
+  let n = 0;
+  E.alunos.forEach((a) => { if (gerarParaAluno(a, comp)) n++; });
+  if (!E.config.ultimaCompGerada || comp > E.config.ultimaCompGerada) E.config.ultimaCompGerada = comp;
+  return n;
+}
+
+// Ao abrir: gera todos os meses que faltam até o mês atual (cobre meses em que o app não foi aberto).
+function gerarPendentes() {
+  const atual = compAtual();
+  let comp = E.config.ultimaCompGerada ? somarComp(E.config.ultimaCompGerada, 1) : atual;
+  let n = 0;
+  while (comp <= atual) { n += gerarCompetencia(comp); comp = somarComp(comp, 1); }
+  return n;
+}
+
+function mensalidadesDoAluno(id) {
+  return E.mensalidades.filter((m) => m.alunoId === id).sort((x, y) => y.comp.localeCompare(x.comp));
+}
+
+function atrasadasDoAluno(id) {
+  return E.mensalidades.filter((m) => m.alunoId === id && situacao(m) === 'atrasada').sort((x, y) => x.comp.localeCompare(y.comp));
+}
+
+// ---------- Sumidos (ativos há muito tempo sem pagar) ----------
+function ultimoPagamento(id) {
+  return E.mensalidades.filter((m) => m.alunoId === id && m.status === 'paga' && m.dataPag)
+    .reduce((max, m) => (m.dataPag > max ? m.dataPag : max), '') || null;
+}
+// Sem nenhum pagamento, conta a partir da matrícula.
+const diasSemPagar = (a) => diasEntre(ultimoPagamento(a.id) || a.matricula || a.criadoEm, hoje());
+const ehSumido = (a) => a.ativo && diasSemPagar(a) >= (Number(E.config.diasSumido) || 60);
+
+// ---------- Saídas (churn) ----------
+const MOTIVOS_SAIDA = ['Financeiro', 'Horário', 'Mudou de cidade', 'Lesão ou saúde', 'Perdeu o interesse', 'Foi para outra academia', 'Não informou', 'Outro'];
+const saidaAtual = (a) => (!a.ativo && a.saidas && a.saidas.length ? a.saidas[a.saidas.length - 1] : null);
+
+// Aluno estava ativo na data? null = não dá para saber (inativado antes do registro de saídas).
+function ativoEm(a, iso) {
+  if ((a.matricula || a.criadoEm) > iso) return false;
+  const s = a.saidas || [];
+  if (!a.ativo && !s.length) return null;
+  return !s.some((x) => x.data <= iso && (!x.retorno || x.retorno > iso));
+}
+
+function recebidoEntre(de, ate) {
+  return E.mensalidades.filter((m) => m.status === 'paga' && m.dataPag >= de && m.dataPag <= ate);
+}
+
+// ===================== WhatsApp =====================
+
+function numeroWhats(tel) {
+  let d = String(tel || '').replace(/\D/g, '');
+  if (d.startsWith('0')) d = d.replace(/^0+/, '');
+  if (d.length === 10 || d.length === 11) d = '55' + d;
+  return d.length >= 12 && d.length <= 13 ? d : null;
+}
+
+function montarMensagem(modelo, aluno, lista) {
+  const total = lista.reduce((s, m) => s + Number(m.valor), 0);
+  const comps = lista.map((m) => fmtComp(m.comp));
+  const competencia = comps.length > 1 ? comps.slice(0, -1).join(', ') + ' e ' + comps[comps.length - 1] : comps[0] || '';
+  const vars = {
+    nome: primeiroNome(aluno.nome),
+    nome_completo: aluno.nome,
+    competencia,
+    valor: brl(total),
+    vencimento: lista[0] ? fmtData(lista[0].venc) : '',
+    dias: lista[0] ? String(diasAtraso(lista[0])) : '',
+    pix: E.config.pix || '(consultar)',
+    academia: E.config.academia || '',
+  };
+  return modelo.replace(/\{(\w+)\}/g, (t, k) => (k in vars ? vars[k] : t));
+}
+
+async function enviarWhats(alunoId, tipo, mensIds) {
+  const a = alunoPorId(alunoId);
+  if (!a) return;
+  const num = numeroWhats(a.telefone);
+  if (!num) { avisar('Telefone inválido. Edite o cadastro do aluno (DDD + número).'); return; }
+  const lista = mensIds.map(mensPorId).filter(Boolean).sort((x, y) => x.comp.localeCompare(y.comp));
+  const modelo = tipo === 'lembrete' ? E.config.msgLembrete : E.config.msgAtraso;
+  const texto = montarMensagem(modelo, a, lista);
+  window.open(`https://wa.me/${num}?text=${encodeURIComponent(texto)}`, '_blank');
+  lista.forEach((m) => { m.ultimoAviso = hoje(); });
+  await persistir();
+  render();
+}
+
+// ===================== Modal =====================
+
+const modal = document.getElementById('modal');
+const modalCorpo = document.getElementById('modal-corpo');
+function abrirModal(html) { modalCorpo.innerHTML = html; if (!modal.open) modal.showModal(); }
+function fecharModal() { if (modal.open) modal.close(); }
+modal.addEventListener('click', (e) => { if (e.target === modal) fecharModal(); });
+
+// ===================== Ações =====================
+
+const acoes = {
+  // ---------- Alunos ----------
+  formAluno(id) {
+    const a = id ? alunoPorId(id) : null;
+    const v = a || { nome: '', telefone: '', matricula: hoje(), diaVenc: 10, valor: E.config.valorPadrao, obs: '' };
+    abrirModal(`
+      <h3>${a ? 'Editar aluno' : 'Novo aluno'}</h3>
+      <form class="campos" id="f-aluno">
+        <label>Nome completo<input name="nome" required value="${esc(v.nome)}" autocomplete="off"></label>
+        <label>WhatsApp (DDD + número)<input name="telefone" type="tel" inputmode="tel" placeholder="49 99999-9999" value="${esc(v.telefone)}"></label>
+        <div class="linha">
+          <label>Dia do vencimento<input name="diaVenc" type="number" min="1" max="31" required value="${esc(v.diaVenc)}"></label>
+          <label>Mensalidade (R$)<input name="valor" inputmode="decimal" required value="${esc(numBR(v.valor))}"></label>
+        </div>
+        <label>Data da matrícula<input name="matricula" type="date" required value="${esc(v.matricula)}"></label>
+        <label>Observações<textarea name="obs" placeholder="Faixa, plano, desconto, responsável...">${esc(v.obs)}</textarea></label>
+        ${a ? '<p class="ajuda">Mudanças de valor e de dia de vencimento valem para as mensalidades em aberto deste mês em diante.</p>' : ''}
+        <div class="botoes">
+          <button type="button" class="btn secundario" onclick="fecharModal()">Cancelar</button>
+          <button type="submit" class="btn ok">Salvar</button>
+        </div>
+      </form>`);
+    document.getElementById('f-aluno').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const valor = lerValor(f.get('valor'));
+      const dia = parseInt(f.get('diaVenc'), 10);
+      if (!Number.isFinite(valor) || valor < 0) { avisar('Valor inválido.'); return; }
+      if (!(dia >= 1 && dia <= 31)) { avisar('Dia de vencimento deve ser de 1 a 31.'); return; }
+      const dados = {
+        nome: String(f.get('nome')).trim(), telefone: String(f.get('telefone')).trim(),
+        diaVenc: dia, valor, matricula: f.get('matricula'), obs: String(f.get('obs')).trim(),
+      };
+      if (a) {
+        Object.assign(a, dados);
+        E.mensalidades
+          .filter((m) => m.alunoId === a.id && m.status === 'aberta' && m.comp >= compAtual())
+          .forEach((m) => { m.valor = valor; m.venc = vencimentoDe(m.comp, dia); });
+      } else {
+        const novo = { id: uid(), ativo: true, criadoEm: hoje(), ...dados };
+        E.alunos.push(novo);
+        const ate = E.config.ultimaCompGerada && E.config.ultimaCompGerada > compAtual() ? E.config.ultimaCompGerada : compAtual();
+        for (let c = inicioAluno(novo); c <= ate; c = somarComp(c, 1)) gerarParaAluno(novo, c);
+      }
+      await persistir();
+      fecharModal();
+      avisar(a ? 'Cadastro atualizado.' : 'Aluno cadastrado.');
+      render();
+    };
+  },
+
+  fichaAluno(id) {
+    const a = alunoPorId(id);
+    if (!a) return;
+    const ms = mensalidadesDoAluno(id);
+    const totalPago = ms.filter((m) => m.status === 'paga').reduce((s, m) => s + Number(m.valorPago), 0);
+    const atrasadas = atrasadasDoAluno(id);
+    const saida = saidaAtual(a);
+    const ultPag = ultimoPagamento(a.id);
+    abrirModal(`
+      <h3>${esc(a.nome)}</h3>
+      <div class="detalhe">${a.ativo ? (ehSumido(a) ? `<span class="etiqueta atrasada">Sumido: ${diasSemPagar(a)} dias sem pagar</span><br>` : '') : '<span class="etiqueta cancelada">Inativo</span> '}
+        ${saida ? `Saiu em ${fmtData(saida.data)} · Motivo: ${esc(saida.motivo)}${saida.obs ? ' (' + esc(saida.obs) + ')' : ''}<br>` : ''}
+        WhatsApp: ${esc(a.telefone || '-')}<br>
+        Vence todo dia ${a.diaVenc} · ${brl(a.valor)}<br>
+        Matrícula: ${fmtData(a.matricula)}${a.obs ? '<br>Obs.: ' + esc(a.obs) : ''}<br>
+        Último pagamento: ${ultPag ? fmtData(ultPag) : 'nenhum'}<br>
+        <b>Total pago: ${brl(totalPago)}</b>
+      </div>
+      <div class="botoes">
+        <button class="btn pequeno" onclick="acoes.formAluno('${a.id}')">Editar</button>
+        ${atrasadas.length ? `<button class="btn whats pequeno" onclick="enviarWhats('${a.id}','atraso',${esc(JSON.stringify(atrasadas.map((m) => m.id)))})">Cobrar atraso</button>` : ''}
+        <button class="btn secundario pequeno" onclick="acoes.alternarAtivo('${a.id}')">${a.ativo ? 'Inativar' : 'Reativar'}</button>
+        <button class="btn perigo pequeno" onclick="acoes.excluirAluno('${a.id}')">Excluir</button>
+      </div>
+      <h2>Histórico</h2>
+      <div class="lista">${ms.length ? ms.map((m) => itemMensalidade(m, { semNome: true })).join('') : '<div class="vazio">Sem mensalidades.</div>'}</div>
+      <div class="botoes"><button class="btn secundario" onclick="fecharModal()">Fechar</button></div>`);
+  },
+
+  async alternarAtivo(id) {
+    const a = alunoPorId(id);
+    if (a.ativo) { acoes.formSaida(id); return; }
+    a.ativo = true;
+    const s = a.saidas && a.saidas[a.saidas.length - 1];
+    if (s && !s.retorno) s.retorno = hoje();
+    gerarParaAluno(a, compAtual());
+    await persistir();
+    avisar('Aluno reativado.');
+    acoes.fichaAluno(id);
+    render();
+  },
+
+  // Inativar com data e motivo da saída (alimenta o churn nos Relatórios).
+  formSaida(id) {
+    const a = alunoPorId(id);
+    abrirModal(`
+      <h3>Inativar ${esc(a.nome)}</h3>
+      <form class="campos" id="f-saida">
+        <label>Data da saída<input name="data" type="date" required value="${hoje()}"></label>
+        <label>Motivo<select name="motivo" required>${MOTIVOS_SAIDA.map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+        <label>Observação<textarea name="obs" placeholder="Opcional"></textarea></label>
+        <label class="check"><input type="checkbox" name="cancelar" checked> Cancelar as mensalidades em aberto que vencem depois da saída</label>
+        <p class="ajuda">Mensalidades vencidas até a data da saída continuam em aberto, como dívida. Os pagamentos já recebidos não mudam.</p>
+        <div class="botoes">
+          <button type="button" class="btn secundario" onclick="acoes.fichaAluno('${a.id}')">Voltar</button>
+          <button type="submit" class="btn perigo">Inativar</button>
+        </div>
+      </form>`);
+    document.getElementById('f-saida').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const data = f.get('data');
+      a.ativo = false;
+      a.saidas = [...(a.saidas || []), { data, motivo: f.get('motivo'), obs: String(f.get('obs')).trim() }];
+      let n = 0;
+      if (f.get('cancelar')) {
+        E.mensalidades
+          .filter((m) => m.alunoId === a.id && m.status === 'aberta' && m.venc > data)
+          .forEach((m) => { m.status = 'cancelada'; n++; });
+      }
+      await persistir();
+      avisar(`Aluno inativado.${n ? ` ${n} mensalidade(s) cancelada(s).` : ''}`);
+      acoes.fichaAluno(id);
+      render();
+    };
+  },
+
+  async excluirAluno(id) {
+    const a = alunoPorId(id);
+    const pagas = E.mensalidades.filter((m) => m.alunoId === id && m.status === 'paga');
+    const outras = E.mensalidades.filter((m) => m.alunoId === id && m.status !== 'paga');
+    if (!confirm(`Excluir o cadastro de ${a.nome}?\n\n` +
+      `• ${pagas.length} pagamento(s) recebido(s) ficam guardados nos relatórios, no teto do MEI e no CSV.\n` +
+      `• ${outras.length} mensalidade(s) em aberto ou cancelada(s) serão apagadas.\n\n` +
+      `Isso não pode ser desfeito. Para só parar de cobrar, use "Inativar".`)) return;
+    pagas.forEach((m) => { m.alunoNome = a.nome; });
+    E.mensalidades = E.mensalidades.filter((m) => m.alunoId !== id || m.status === 'paga');
+    E.alunos = E.alunos.filter((x) => x.id !== id);
+    await persistir();
+    fecharModal();
+    avisar(`Cadastro excluído. ${pagas.length} pagamento(s) mantido(s).`);
+    render();
+  },
+
+  // ---------- Mensalidades ----------
+  detalheMens(id) {
+    const m = mensPorId(id);
+    const a = alunoPorId(m.alunoId);
+    const s = situacao(m);
+    abrirModal(`
+      <h3>${esc(nomeDaMens(m))}${a ? '' : ' <span class="etiqueta cancelada">Excluído</span>'}</h3>
+      <div class="detalhe">
+        Competência: <b>${fmtComp(m.comp)}</b> · <span class="etiqueta ${s}">${ROTULO[s]}</span><br>
+        Vencimento: ${fmtData(m.venc)} · Valor: ${brl(m.valor)}<br>
+        ${m.status === 'paga' ? `Pago em ${fmtData(m.dataPag)} · ${brl(m.valorPago)} · ${esc(m.forma)}<br>` : ''}
+        ${s === 'atrasada' ? `${diasAtraso(m)} dias de atraso<br>` : ''}
+        ${m.ultimoAviso ? `Último aviso: ${fmtData(m.ultimoAviso)}` : ''}
+        ${a ? '' : '<p class="ajuda">O cadastro deste aluno foi excluído. O pagamento fica guardado para os relatórios e não pode ter a baixa desfeita.</p>'}
+      </div>
+      <div class="botoes">
+        ${m.status === 'aberta' ? `<button class="btn ok" onclick="acoes.formBaixa('${m.id}')">Dar baixa</button>` : ''}
+        ${m.status === 'aberta' && a ? `<button class="btn whats" onclick="enviarWhats('${a.id}','${s === 'atrasada' ? 'atraso' : 'lembrete'}',['${m.id}'])">WhatsApp</button>` : ''}
+        ${m.status === 'paga' && a ? `<button class="btn secundario" onclick="acoes.desfazerBaixa('${m.id}')">Desfazer baixa</button>` : ''}
+        ${m.status === 'aberta' ? `<button class="btn secundario" onclick="acoes.formEditarMens('${m.id}')">Editar</button>` : ''}
+        ${m.status === 'aberta' ? `<button class="btn perigo" onclick="acoes.cancelarMens('${m.id}')">Cancelar cobrança</button>` : ''}
+        ${m.status === 'cancelada' ? `<button class="btn secundario" onclick="acoes.reabrirMens('${m.id}')">Reabrir</button>` : ''}
+      </div>
+      <div class="botoes"><button class="btn secundario" onclick="fecharModal()">Fechar</button></div>`);
+  },
+
+  formBaixa(id) {
+    const m = mensPorId(id);
+    const a = alunoPorId(m.alunoId);
+    abrirModal(`
+      <h3>Dar baixa</h3>
+      <p class="detalhe">${esc(a ? a.nome : '')} · ${fmtComp(m.comp)}</p>
+      <form class="campos" id="f-baixa">
+        <label>Data do pagamento<input name="data" type="date" required value="${hoje()}"></label>
+        <label>Valor pago (R$)<input name="valor" inputmode="decimal" required value="${numBR(m.valor)}"></label>
+        <label>Forma
+          <select name="forma"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Outro</option></select>
+        </label>
+        <div class="botoes">
+          <button type="button" class="btn secundario" onclick="fecharModal()">Cancelar</button>
+          <button type="submit" class="btn ok">Confirmar</button>
+        </div>
+      </form>`);
+    document.getElementById('f-baixa').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const v = lerValor(f.get('valor'));
+      if (!Number.isFinite(v) || v <= 0) { avisar('Valor inválido.'); return; }
+      Object.assign(m, { status: 'paga', dataPag: f.get('data'), valorPago: v, forma: f.get('forma') });
+      await persistir();
+      fecharModal();
+      avisar(`Baixa registrada: ${brl(v)}.`);
+      render();
+    };
+  },
+
+  formEditarMens(id) {
+    const m = mensPorId(id);
+    abrirModal(`
+      <h3>Editar mensalidade ${fmtComp(m.comp)}</h3>
+      <form class="campos" id="f-mens">
+        <label>Vencimento<input name="venc" type="date" required value="${m.venc}"></label>
+        <label>Valor (R$)<input name="valor" inputmode="decimal" required value="${numBR(m.valor)}"></label>
+        <div class="botoes">
+          <button type="button" class="btn secundario" onclick="fecharModal()">Cancelar</button>
+          <button type="submit" class="btn ok">Salvar</button>
+        </div>
+      </form>`);
+    document.getElementById('f-mens').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const v = lerValor(f.get('valor'));
+      if (!Number.isFinite(v) || v < 0) { avisar('Valor inválido.'); return; }
+      m.venc = f.get('venc');
+      m.valor = v;
+      await persistir();
+      fecharModal();
+      render();
+    };
+  },
+
+  async desfazerBaixa(id) {
+    const m = mensPorId(id);
+    if (!alunoPorId(m.alunoId)) { avisar('Aluno excluído: a baixa não pode ser desfeita.'); return; }
+    if (!confirm('Desfazer a baixa desta mensalidade?')) return;
+    Object.assign(m, { status: 'aberta', dataPag: null, valorPago: null, forma: null });
+    await persistir();
+    fecharModal();
+    avisar('Baixa desfeita.');
+    render();
+  },
+
+  async cancelarMens(id) {
+    if (!confirm('Cancelar esta cobrança (ex.: aluno saiu, férias, isento)?')) return;
+    mensPorId(id).status = 'cancelada';
+    await persistir();
+    fecharModal();
+    render();
+  },
+
+  async reabrirMens(id) {
+    mensPorId(id).status = 'aberta';
+    await persistir();
+    fecharModal();
+    render();
+  },
+
+  async gerarMesVisivel() {
+    const n = gerarCompetencia(ui.comp);
+    await persistir();
+    avisar(`${n} mensalidade(s) gerada(s) para ${fmtComp(ui.comp)}.`);
+    render();
+  },
+
+  // ---------- Ajustes ----------
+  async salvarConfig(ev) {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const v = lerValor(f.get('valorPadrao'));
+    const tol = parseInt(f.get('tolerancia'), 10);
+    const sum = parseInt(f.get('diasSumido'), 10);
+    if (!Number.isFinite(v) || v < 0) { avisar('Valor padrão inválido.'); return; }
+    Object.assign(E.config, {
+      diasSumido: sum >= 15 && sum <= 365 ? sum : 60,
+      academia: String(f.get('academia')).trim(),
+      valorPadrao: v,
+      tolerancia: Number.isFinite(tol) && tol >= 0 ? tol : 0,
+      pix: String(f.get('pix')).trim(),
+      msgLembrete: String(f.get('msgLembrete')).trim() || MSG_LEMBRETE,
+      msgAtraso: String(f.get('msgAtraso')).trim() || MSG_ATRASO,
+    });
+    await persistir();
+    avisar('Ajustes salvos.');
+    render();
+  },
+
+  restaurarMensagens() {
+    document.querySelector('[name=msgLembrete]').value = MSG_LEMBRETE;
+    document.querySelector('[name=msgAtraso]').value = MSG_ATRASO;
+    avisar('Modelos padrão restaurados. Toque em Salvar.');
+  },
+
+  async backup() {
+    const nome = `backup-academia-${fmtData(hoje()).replace(/\//g, '-')}.json`;
+    const conteudo = JSON.stringify({ app: 'mensalidades-academia', exportadoEm: new Date().toISOString(), estado: E }, null, 1);
+    const arquivo = new File([conteudo], nome, { type: 'application/json' });
+    let ok = false;
+    if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
+      try { await navigator.share({ files: [arquivo], title: 'Backup mensalidades' }); ok = true; }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+    if (!ok) { baixarArquivo(arquivo); ok = true; }
+    E.ultimoBackup = hoje();
+    await persistir();
+    avisar('Backup gerado. Guarde o arquivo no Drive ou no seu WhatsApp.');
+    render();
+  },
+
+  async restaurar(input) {
+    const arq = input.files[0];
+    input.value = '';
+    if (!arq) return;
+    try {
+      const obj = JSON.parse(await arq.text());
+      const est = obj.estado;
+      if (obj.app !== 'mensalidades-academia' || !est || !Array.isArray(est.alunos) || !Array.isArray(est.mensalidades)) throw new Error('formato');
+      if (!confirm(`Restaurar backup de ${fmtData(String(obj.exportadoEm).slice(0, 10))}?\n${est.alunos.length} alunos e ${est.mensalidades.length} mensalidades.\n\nOs dados atuais serão SUBSTITUÍDOS.`)) return;
+      E = { ...estadoInicial(), ...est, config: { ...estadoInicial().config, ...est.config } };
+      gerarPendentes();
+      await persistir();
+      avisar('Backup restaurado.');
+      render();
+    } catch {
+      avisar('Arquivo inválido. Use um backup gerado por este app.');
+    }
+  },
+
+  exportarCSV() {
+    const mes = document.getElementById('csv-mes').value; // AAAA-MM ou vazio
+    const pagas = E.mensalidades
+      .filter((m) => m.status === 'paga' && (!mes || compDe(m.dataPag) === mes))
+      .sort((x, y) => x.dataPag.localeCompare(y.dataPag));
+    if (!pagas.length) { avisar('Nenhum pagamento no período.'); return; }
+    const limpa = (s) => String(s || '').replace(/[;\r\n]/g, ' ');
+    const linhas = ['data;historico;valor;conta;origem;id_extrato;observacao'];
+    pagas.forEach((m) => {
+      linhas.push([fmtData(m.dataPag), limpa(`Mensalidade ${fmtComp(m.comp)} - ${nomeDaMens(m)}`),
+        numBR(m.valorPago), 'R01', 'app-academia', 'app-' + m.id.slice(0, 8), limpa(m.forma)].join(';'));
+    });
+    const nome = `recebimentos-app-${mes ? fmtComp(mes).replace('/', '-') : 'tudo'}.csv`;
+    baixarArquivo(new File(['﻿' + linhas.join('\r\n') + '\r\n'], nome, { type: 'text/csv;charset=utf-8' }));
+    avisar(`${pagas.length} pagamento(s) exportado(s).`);
+  },
+
+  async importarAlunos(input) {
+    const arq = input.files[0];
+    input.value = '';
+    if (!arq) return;
+    // Arquivo salvo pelo Excel vem em ANSI (windows-1252); os demais, em UTF-8.
+    const bytes = await arq.arrayBuffer();
+    let texto;
+    try { texto = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { texto = new TextDecoder('windows-1252').decode(bytes); }
+    texto = texto.replace(/^﻿/, '');
+    const linhas = texto.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^;*$/.test(l));
+    if (linhas.length && /nome/i.test(linhas[0])) linhas.shift();
+    let novos = 0, repetidos = 0;
+    const existentes = new Set(E.alunos.map((a) => a.nome.toLowerCase()));
+    linhas.forEach((l) => {
+      const [nome, telefone, dia, valor, obs] = l.split(';').map((s) => (s || '').trim().replace(/^"|"$/g, ''));
+      if (!nome) return;
+      if (existentes.has(nome.toLowerCase())) { repetidos++; return; }
+      const v = lerValor(valor);
+      const d = parseInt(dia, 10);
+      const a = {
+        id: uid(), ativo: true, criadoEm: hoje(), matricula: hoje(), nome, telefone: telefone || '',
+        diaVenc: d >= 1 && d <= 31 ? d : 10, valor: Number.isFinite(v) && v > 0 ? v : Number(E.config.valorPadrao), obs: obs || '',
+      };
+      E.alunos.push(a);
+      existentes.add(nome.toLowerCase());
+      gerarParaAluno(a, compAtual());
+      novos++;
+    });
+    await persistir();
+    avisar(`${novos} aluno(s) importado(s)${repetidos ? `, ${repetidos} já existia(m)` : ''}.`);
+    render();
+  },
+
+  async apagarTudo() {
+    if (!confirm('Apagar TODOS os alunos e pagamentos deste celular?')) return;
+    if (prompt('Digite APAGAR para confirmar:') !== 'APAGAR') { avisar('Nada foi apagado.'); return; }
+    E = estadoInicial();
+    gerarPendentes();
+    await persistir();
+    avisar('Dados apagados.');
+    render();
+  },
+};
+
+function baixarArquivo(arquivo) {
+  const url = URL.createObjectURL(arquivo);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = arquivo.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// ===================== Componentes =====================
+
+function itemMensalidade(m, opc = {}) {
+  const a = alunoPorId(m.alunoId);
+  const s = situacao(m);
+  let det = `Vence ${fmtData(m.venc)} · ${brl(m.valor)}`;
+  if (m.status === 'paga') det = `Pago ${fmtDiaMes(m.dataPag)} · ${brl(m.valorPago)} · ${esc(m.forma)}`;
+  if (s === 'atrasada') det += ` · ${diasAtraso(m)}d`;
+  const titulo = opc.semNome ? `${fmtComp(m.comp)}` : esc(nomeDaMens(m));
+  const acao = m.status === 'aberta'
+    ? `<button class="btn ok pequeno" onclick="event.stopPropagation();acoes.formBaixa('${m.id}')">Baixa</button>`
+    : '';
+  return `
+    <div class="item clicavel" onclick="acoes.detalheMens('${m.id}')">
+      <div class="info">
+        <div class="nome">${titulo}</div>
+        <div class="detalhe"><span class="etiqueta ${s}">${ROTULO[s]}</span> ${det}</div>
+      </div>
+      <div class="acoes">${acao}</div>
+    </div>`;
+}
+
+function cartao(rotulo, valor, sub = '', classe = '') {
+  return `<div class="cartao ${classe}"><div class="rotulo">${rotulo}</div><div class="valor">${valor}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
 }
 
 // ===================== Telas =====================
 
-function render() {
-  conferirLicenca();
-  limparRelatorio();
-  document.querySelectorAll('.abas button').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === aba));
-  const chip = document.getElementById('cliente-ativo');
-  chip.hidden = !planejador();
-  if (planejador()) chip.textContent = perfil().pessoal.nome || 'Cliente sem nome';
-  const telas = { inicio: telaInicio, dados: telaDados, plano: telaPlano, simular: telaSimular, ajustes: telaAjustes };
-  const titulos = { inicio: planejador() ? 'Modo Planejador' : 'Planejador Financeiro', dados: 'Seus dados', plano: 'Seu plano', simular: 'Simular', ajustes: 'Ajustes' };
-  document.getElementById('titulo').textContent = titulos[aba];
-  document.getElementById('conteudo').innerHTML = telas[aba]();
-  window.scrollTo(0, 0);
-}
+function telaPainel() {
+  const h = hoje();
+  const comp = compAtual();
+  const recebidoMes = recebidoEntre(`${comp}-01`, `${comp}-31`);
+  const totRecebido = recebidoMes.reduce((s, m) => s + Number(m.valorPago), 0);
+  const doMes = E.mensalidades.filter((m) => m.comp === comp);
+  const aReceber = doMes.filter((m) => situacao(m) === 'aberta');
+  const atrasadas = E.mensalidades.filter((m) => situacao(m) === 'atrasada');
+  const alunosAtraso = new Set(atrasadas.map((m) => m.alunoId)).size;
+  const ativos = E.alunos.filter((a) => a.ativo).length;
 
-function irPara(novaAba) { aba = novaAba; etapaAberta = null; render(); }
+  const ano = h.slice(0, 4);
+  const totAno = recebidoEntre(`${ano}-01-01`, `${ano}-12-31`).reduce((s, m) => s + Number(m.valorPago), 0);
+  const teto = Number(E.config.tetoMei) || 81000;
+  const pct = Math.min(100, (totAno / teto) * 100);
+  const classeTeto = pct >= 100 ? 'estourou' : pct >= 80 ? 'perto' : '';
 
-function progresso(pf) {
-  const feitas = ETAPAS.filter((e) => pf.etapasFeitas[e.id]).length;
-  return { feitas, total: ETAPAS.length };
-}
+  const proximas = E.mensalidades
+    .filter((m) => m.status === 'aberta' && m.venc >= h && m.venc <= somarDias(h, 7))
+    .sort((x, y) => x.venc.localeCompare(y.venc));
 
-function revisaoPendente(pf) {
-  const ult = pf.historico[pf.historico.length - 1];
-  if (!ult) return null;
-  const prox = somarMeses(ult.data, P.premissas.revisaoMeses);
-  return { prox, vencida: hoje() >= prox };
-}
+  const semBackup = !E.ultimoBackup || diasEntre(E.ultimoBackup, h) >= 7;
 
-function avisosTopo() {
-  let html = '';
-  if (pedidoInstalar && !instalado()) {
-    html += `<div class="cartao destaque"><h3>📲 Instale o app no celular</h3>
-      <p class="sub">Fica com ícone na tela inicial e funciona sem internet.</p>
-      <button class="btn ouro cheio" data-acao="instalar">Instalar</button></div>`;
-  }
-  const temDados = estado.perfis.some((p) => Object.keys(p.etapasFeitas).length);
-  const ult = estado.config.ultimoBackup;
-  if (temDados && (!ult || diasDesde(ult) >= 7)) {
-    html += `<div class="faixa-aviso">💾 ${ult ? `Último backup há ${diasDesde(ult)} dias.` : 'Você ainda não fez backup.'} Os dados ficam só neste celular: guarde uma cópia no Google Drive ou no seu WhatsApp.
-      <div class="botoes"><button class="btn pequeno" data-acao="exportar">Fazer backup agora</button></div></div>`;
-  }
-  const lic = licencaValida();
-  if (planejador() && lic) {
-    const dias = diasParaVencer(lic);
-    if (!vitalicia(lic) && dias <= P.licenca.avisoDias) {
-      html += `<div class="faixa-aviso">🔑 Sua licença do Modo Planejador vence ${dias === 0 ? 'hoje' : `em ${dias} ${dias === 1 ? 'dia' : 'dias'}`} (${fmtData(lic.validade)}). Fale com ${esc(P.planejador.nome)} para renovar.</div>`;
-    }
-    if (!assessor().whatsapp) {
-      html += `<div class="faixa-aviso">📱 Cadastre o seu WhatsApp em <b>Ajustes</b>. Enquanto isso, os contatos dos clientes vão para ${esc(P.planejador.nome)}.</div>`;
-    }
-  }
-  return html;
-}
-
-function telaInicio() {
-  if (!estado.config.consentiu) return telaBoasVindas();
-  if (planejador()) return avisosTopo() + telaClientes();
-  const pf = perfil();
-  const { feitas, total } = progresso(pf);
-  const ult = pf.historico[pf.historico.length - 1];
-  const rev = revisaoPendente(pf);
-  const nome = primeiroNome(pf.pessoal.nome);
   return `
-    ${avisosTopo()}
-    ${rev && rev.vencida ? `<div class="faixa-aviso">⏰ Já passaram ${P.premissas.revisaoMeses} meses desde o seu último plano. Atualize os dados e veja sua evolução.</div>` : ''}
-    <div class="cartao destaque">
-      <h3>${nome ? `Olá, ${esc(nome)}!` : 'Seu planejamento financeiro'}</h3>
-      <p class="sub">Etapas preenchidas: ${feitas} de ${total}</p>
-      <div class="progresso"><div style="width:${(feitas / total) * 100}%"></div></div>
-      ${ult ? `<p>Último Índice de Saúde Financeira: <b>${ult.indice}/100</b> (${fmtData(ult.data)})</p>` : ''}
-      <div class="botoes">
-        <button class="btn ouro" data-acao="ir" data-aba="dados">${feitas ? 'Continuar preenchendo' : 'Começar'}</button>
-        ${feitas ? '<button class="btn" data-acao="ir" data-aba="plano">Ver meu plano</button>' : ''}
+    ${semBackup && E.alunos.length ? `<div class="faixa-aviso"><span>${E.ultimoBackup ? `Último backup em ${fmtData(E.ultimoBackup)}.` : 'Você ainda não fez backup.'} Os dados ficam só neste celular.</span><button class="btn pequeno" onclick="acoes.backup()">Backup</button></div>` : ''}
+    ${!E.alunos.length ? `<div class="cartao largo"><b>Comece cadastrando seus alunos.</b><p class="detalhe">Toque em "+ Aluno" no topo, ou importe uma lista em Ajustes.</p></div>` : ''}
+    <div class="cartoes">
+      ${cartao('Recebido no mês', brl(totRecebido), `${recebidoMes.length} pagamento(s)`, 'ok')}
+      ${cartao('A receber no mês', brl(aReceber.reduce((s, m) => s + Number(m.valor), 0)), `${aReceber.length} em aberto, no prazo`)}
+      ${cartao('Em atraso', brl(atrasadas.reduce((s, m) => s + Number(m.valor), 0)), `${alunosAtraso} aluno(s)`, atrasadas.length ? 'alerta' : '')}
+      ${cartao('Alunos ativos', String(ativos), `${E.alunos.length - ativos} inativo(s)`)}
+      <div class="cartao largo">
+        <div class="rotulo">Recebido em ${ano} (pelo app) x teto do MEI</div>
+        <div class="valor">${brl(totAno)}</div>
+        <div class="sub">${pct.toFixed(1).replace('.', ',')}% de ${brl(teto)}</div>
+        <div class="barra-teto ${classeTeto}"><div style="width:${pct}%"></div></div>
       </div>
     </div>
-    ${ult && pf.historico.length > 1 ? graficoEvolucao(pf.historico) : ''}
-    <h2>Como funciona</h2>
-    <div class="cartao">
-      <ol style="margin:0;padding-left:20px">
-        <li><b>Você conta a sua situação</b>: renda, gastos, patrimônio, dívidas, objetivos.</li>
-        <li><b>O app analisa</b> oito áreas: orçamento, reserva, dívidas, investimentos, aposentadoria, proteção, impostos e sucessão.</li>
-        <li><b>Você recebe um plano</b> com o Índice de Saúde Financeira e o que fazer em 30 dias, 6 e 12 meses.</li>
-        <li><b>Um planejador ajuda a pôr em prática</b>, se você quiser.</li>
-        <li><b>Revisão a cada ${P.premissas.revisaoMeses} meses</b> para acompanhar a evolução.</li>
-      </ol>
-    </div>
-    <p class="legal">🔒 Seus dados ficam só neste celular. Nada é enviado sem você pedir.</p>`;
-}
-
-function telaBoasVindas() {
-  return `
-    <div class="cartao destaque">
-      <h3>Bem-vindo ao seu planejamento financeiro</h3>
-      <p>Em cerca de 15 minutos, você responde perguntas sobre a sua vida financeira e recebe um <b>plano completo</b>, no mesmo método usado por planejadores financeiros profissionais.</p>
-      <p>🔒 <b>Privacidade:</b> tudo o que você digitar fica guardado <b>só neste celular</b>. Não há cadastro, login nem servidor.</p>
-      <p class="legal">O plano é educativo e usa estimativas. Não é recomendação individual de investimento. Para aplicar o plano com segurança, converse com um profissional.</p>
-      <p class="legal">${esc(P.direitos)}</p>
-      <form class="campos" onsubmit="return false">
-        <label class="check"><input type="checkbox" id="ck-consente"> Li e entendi</label>
-      </form>
-      <div class="botoes"><button class="btn ouro" data-acao="consentir">Começar</button></div>
+    <h2>Vencem nos próximos 7 dias</h2>
+    <div class="lista">
+      ${proximas.length ? proximas.map((m) => {
+        const a = alunoPorId(m.alunoId);
+        return `
+        <div class="item">
+          <div class="info clicavel" onclick="acoes.detalheMens('${m.id}')">
+            <div class="nome">${esc(a.nome)}</div>
+            <div class="detalhe">${m.venc === h ? '<b>Vence hoje</b>' : 'Vence ' + fmtData(m.venc)} · ${brl(m.valor)}${m.ultimoAviso ? ' · lembrado ' + fmtDiaMes(m.ultimoAviso) : ''}</div>
+          </div>
+          <div class="acoes">
+            <button class="btn whats pequeno" onclick="enviarWhats('${a.id}','lembrete',['${m.id}'])">Lembrar</button>
+            <button class="btn ok pequeno" onclick="acoes.formBaixa('${m.id}')">Baixa</button>
+          </div>
+        </div>`;
+      }).join('') : '<div class="vazio">Nenhum vencimento nos próximos 7 dias.</div>'}
     </div>`;
 }
 
-function telaClientes() {
-  const itens = estado.perfis.map((p) => {
-    const ult = p.historico[p.historico.length - 1];
-    const { feitas, total } = progresso(p);
-    return `<div class="item ${p.id === estado.ativoId ? 'ativo' : ''}" data-acao="ativar" data-id="${p.id}">
-      <span class="icone">👤</span>
-      <div class="info"><div class="nome">${esc(p.pessoal.nome || 'Cliente sem nome')}</div>
-      <div class="detalhe">${feitas}/${total} etapas · ${ult ? `índice ${ult.indice} em ${fmtData(ult.data)}` : 'sem plano ainda'}</div></div>
-    </div>`;
-  }).join('');
-  return `
-    <div class="botoes" style="margin-top:0"><button class="btn ouro" data-acao="novo-cliente">+ Novo cliente</button></div>
-    <h2>Clientes neste aparelho</h2>
-    <div class="lista">${itens}</div>
-    <p class="legal" style="margin-top:12px">Toque no cliente para trabalhar com ele. O cliente pode trazer o arquivo .json do app dele (Ajustes &gt; Exportar) e você importa aqui.</p>`;
-}
-
-function graficoEvolucao(hist) {
-  const pts = hist.slice(-8);
-  const w = 320, h = 110, m = 24;
-  const x = (i) => m + (i * (w - 2 * m)) / Math.max(1, pts.length - 1);
-  const y = (v) => h - 20 - (v / 100) * (h - 36);
-  const linha = pts.map((p, i) => `${x(i)},${y(p.indice)}`).join(' ');
-  const rot = pts.map((p, i) => `<text x="${x(i)}" y="${h - 4}" text-anchor="middle">${fmtData(p.data).slice(0, 5)}</text><text x="${x(i)}" y="${y(p.indice) - 7}" text-anchor="middle">${p.indice}</text>`).join('');
-  return `<div class="cartao"><h3>Sua evolução</h3>
-    <svg class="grafico-sim" viewBox="0 0 ${w} ${h}" role="img" aria-label="Evolução do índice"><polyline points="${linha}" fill="none" stroke="var(--destaque)" stroke-width="3"/>${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.indice)}" r="4" fill="var(--destaque)"/>`).join('')}${rot}</svg></div>`;
-}
-
-// ---------- Dados ----------
-
-function telaDados() {
-  if (!estado.config.consentiu) { aba = 'inicio'; return telaInicio(); }
-  if (etapaAberta) return telaEtapa(ETAPAS.find((e) => e.id === etapaAberta));
-  const pf = perfil();
-  const { feitas, total } = progresso(pf);
-  return `
-    <div class="progresso"><div style="width:${(feitas / total) * 100}%"></div></div>
-    <p class="sub">${feitas} de ${total} etapas. Pode preencher em qualquer ordem; tudo é salvo na hora.</p>
-    <div class="lista">${ETAPAS.map((e, i) => `
-      <div class="item ${pf.etapasFeitas[e.id] ? 'feito' : ''}" data-acao="etapa" data-id="${e.id}">
-        <span class="icone">${e.icone}</span>
-        <div class="info"><div class="nome">${i + 1}. ${esc(e.titulo)}</div><div class="detalhe">${esc(e.resumo)}</div></div>
-        <span>›</span>
-      </div>`).join('')}
-    </div>
-    ${feitas >= 3 ? '<div class="botoes"><button class="btn ouro cheio" data-acao="ir" data-aba="plano">Gerar meu plano</button></div>' : ''}`;
-}
-
-function telaEtapa(e) {
-  const pf = perfil();
-  const idx = ETAPAS.indexOf(e);
-  let corpo = '';
-  if (e.perfil) {
-    const resp = pf.suitability.respostas || [];
-    corpo = Calc.QUESTOES_PERFIL.map((q, i) => `
-      <div class="questao"><div class="perg">${i + 1}. ${esc(q.p)}</div>
-      ${q.o.map((o, j) => `<label class="check"><input type="radio" name="q${i}" data-k="suitability.respostas.${i}" data-t="int" value="${j}" ${resp[i] === j ? 'checked' : ''}> ${esc(o)}</label>`).join('')}
-      </div>`).join('');
-  } else {
-    corpo = e.campos.filter((c) => !c.se || c.se(pf)).map((c) => (c.sec ? `<h3 style="margin-top:8px">${esc(c.sec)}</h3>` : campoHtml(c, getPath(pf, c.k), c.k))).join('');
-  }
-  if (e.repetidor) {
-    const R = e.repetidor;
-    const itens = getPath(pf, R.k) || [];
-    corpo += `<h3 style="margin-top:8px">${esc(R.titulo)}</h3>`;
-    if (!itens.length && e.vazioRep) corpo += `<p class="sub">${esc(e.vazioRep)}</p>`;
-    corpo += itens.map((it, i) => `
-      <div class="bloco-rep">
-        <div class="topo-rep">${esc(R.item)} ${i + 1}<button type="button" class="btn secundario pequeno" data-acao="rep-remover" data-k="${R.k}" data-i="${i}">Remover</button></div>
-        ${R.campos.map((c) => campoHtml(c, it[c.k], `${R.k}.${i}.${c.k}`)).join('')}
-      </div>`).join('');
-    corpo += `<button type="button" class="btn secundario" data-acao="rep-add" data-id="${e.id}">+ Adicionar ${esc(R.item.toLowerCase())}</button>`;
-  }
-  const prox = ETAPAS[idx + 1];
-  return `
-    <p class="sub">Etapa ${idx + 1} de ${ETAPAS.length}</p>
-    <h2 style="margin-top:4px">${e.icone} ${esc(e.titulo)}</h2>
-    <form class="campos" onsubmit="return false">${corpo}</form>
-    <div class="botoes">
-      <button class="btn secundario" data-acao="voltar-etapas">Voltar</button>
-      <button class="btn ouro" data-acao="concluir-etapa" data-id="${e.id}">${prox ? 'Salvar e continuar' : 'Salvar e ver o plano'}</button>
-    </div>`;
-}
-
-// ---------- Plano ----------
-
-const corNota = (v) => (v >= 80 ? '#15803d' : v >= 60 ? '#2563eb' : v >= 40 ? '#d97706' : '#b91c1c');
-const ICONE = { ok: '✅', info: 'ℹ️', atencao: '⚠️', risco: '❗' };
-
-function svgIndice(v) {
-  const r = 54, c = 2 * Math.PI * r;
-  return `<svg class="gauge" viewBox="0 0 140 140" role="img" aria-label="Índice ${v} de 100">
-    <circle cx="70" cy="70" r="${r}" class="g-fundo"/>
-    <circle cx="70" cy="70" r="${r}" class="g-valor" stroke="${corNota(v)}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - v / 100)}" transform="rotate(-90 70 70)"/>
-    <text x="70" y="76" class="g-num">${v}</text><text x="70" y="98" class="g-rot">de 100</text></svg>`;
-}
-
-function registrarHistorico(pf, indice) {
-  const ult = pf.historico[pf.historico.length - 1];
-  if (ult && ult.data === hoje()) { if (ult.indice === indice) return; ult.indice = indice; }
-  else pf.historico.push({ data: hoje(), indice });
-  salvar();
-}
-
-function telaPlano() {
-  if (!estado.config.consentiu) { aba = 'inicio'; return telaInicio(); }
-  const pf = perfil();
-  const r = Calc.calcular(pf);
-  if (r.incompleto) {
-    return `<div class="vazio">Para gerar o plano, falta preencher: <b>${r.faltando.map(esc).join(', ')}</b>.</div>
-      <div class="botoes"><button class="btn ouro" data-acao="ir" data-aba="dados">Preencher dados</button></div>`;
-  }
-  registrarHistorico(pf, r.indice);
-  const nome = pf.pessoal.nome || 'você';
-  const prazos = ['30 dias', '6 meses', '12 meses'];
-  let n = 0;
-  const planoAcao = prazos.map((pz) => {
-    const lista = r.acoes.filter((a) => a.prazo === pz);
-    if (!lista.length) return '';
-    return `<div class="prazo-titulo">Próximos ${pz}</div>` + lista.map((a) => `
-      <div class="acao"><div class="num">${++n}</div><div><div class="t">${esc(a.titulo)}</div><div class="d">${esc(a.texto)}</div></div></div>`).join('');
-  }).join('');
-
-  const dominios = r.dominios.map((d) => {
-    const aplic = d.aplicavel !== false && d.nota !== null;
-    let extra = '';
-    if (d.id === 'investimentos') {
-      const al = d.dados.alocacao;
-      extra = `<h3 style="margin-top:12px">Carteira sugerida para o perfil ${esc(d.dados.perfil)}</h3>
-        <table class="tabela">${Object.entries(al).filter(([, v]) => v > 0).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${v}%</td></tr>`).join('')}</table>
-        <p class="legal" style="margin-top:6px">Classes de ativos, não produtos específicos. A escolha dos ativos deve ser feita com um profissional.</p>`;
-    }
-    return `<div class="cartao">
-      <div class="dom-topo"><h3 style="margin:0">${esc(d.nome)}</h3>${aplic ? `<span class="nota" style="color:${corNota(d.nota)}">${d.nota}</span>` : '<span class="sub">não avaliado</span>'}</div>
-      <ul class="achados">${d.achados.map((a) => `<li class="${a.tipo}">${ICONE[a.tipo] || ''} ${esc(a.texto)}</li>`).join('')}</ul>
-      ${extra}
-    </div>`;
-  }).join('');
-
-  const barras = r.dominios.filter((d) => d.aplicavel !== false && d.nota !== null).map((d) => `
-    <div class="barra-linha"><span>${esc(d.nome)}</span><div class="barra"><div style="width:${d.nota}%;background:${corNota(d.nota)}"></div></div><b>${d.nota}</b></div>`).join('');
-
-  const faltam = ETAPAS.filter((e) => !pf.etapasFeitas[e.id]).length;
-  const botaoRelatorio = faltam === 0
-    ? '<button class="btn ouro" data-acao="relatorio">📑 Relatório completo para o cliente</button>'
-    : `<p class="sub" style="width:100%">📑 O relatório completo em PDF (com todos os dados) é liberado quando as 10 etapas estiverem preenchidas. Falta${faltam > 1 ? 'm' : ''} ${faltam}.</p>`;
+function telaMes() {
+  const comp = ui.comp;
+  const doMes = E.mensalidades.filter((m) => m.comp === comp);
+  const naoGerado = !E.config.ultimaCompGerada || comp > E.config.ultimaCompGerada;
+  const filtrar = {
+    todas: () => true,
+    abertas: (m) => situacao(m) === 'aberta',
+    atrasadas: (m) => situacao(m) === 'atrasada',
+    pagas: (m) => m.status === 'paga',
+    canceladas: (m) => m.status === 'cancelada',
+  }[ui.filtroMes];
+  const lista = doMes.filter(filtrar).sort((x, y) => x.venc.localeCompare(y.venc) || (alunoPorId(x.alunoId)?.nome || '').localeCompare(alunoPorId(y.alunoId)?.nome || ''));
+  const validas = doMes.filter((m) => m.status !== 'cancelada');
+  const previsto = validas.reduce((s, m) => s + Number(m.valor), 0);
+  const pagas = validas.filter((m) => m.status === 'paga');
+  const recebido = pagas.reduce((s, m) => s + Number(m.valorPago), 0);
+  const emAberto = validas.filter((m) => m.status === 'aberta').reduce((s, m) => s + Number(m.valor), 0);
+  const botaoFiltro = (k, r) => `<button class="${ui.filtroMes === k ? 'ativo' : ''}" onclick="ui.filtroMes='${k}';render()">${r}</button>`;
 
   return `
-    <div class="so-relatorio">${capaRelatorio(pf, r)}</div>
-    <div class="so-impressao">
-      <h2 style="margin:0">Plano Financeiro de ${esc(pf.pessoal.nome || '')}</h2>
-      <p class="sub">Gerado em ${fmtData(hoje())} · ${esc(creditos())}</p>
+    <div class="navmes">
+      <button class="btn secundario pequeno" onclick="ui.comp=somarComp(ui.comp,-1);render()">◀</button>
+      <strong>${nomeMes(comp)}</strong>
+      <button class="btn secundario pequeno" onclick="ui.comp=somarComp(ui.comp,1);render()">▶</button>
     </div>
-    <div class="cartao">
-      <div class="cabeca-plano">${svgIndice(r.indice)}
-        <div><div class="rotulo">Índice de Saúde Financeira</div><div class="faixa" style="color:${corNota(r.indice)}">${esc(r.faixa)}</div>
-        <p class="sub" style="margin-top:6px">${esc(primeiroNome(nome))}, este é o retrato da sua vida financeira hoje. Abaixo estão as notas de cada área e o passo a passo para melhorar.</p></div>
-      </div>
+    <div class="cartoes">
+      ${cartao('Previsto', brl(previsto), `${validas.length} mensalidade(s)`)}
+      ${cartao('Recebido', brl(recebido), `${pagas.length} paga(s)`, 'ok')}
+      ${cartao('Em aberto', brl(emAberto), '', emAberto ? 'alerta' : '', )}
+      ${cartao('Adimplência', previsto ? ((recebido / previsto) * 100).toFixed(0) + '%' : '-', 'recebido / previsto')}
     </div>
-    <div class="cartao"><h3>Notas por área</h3><div class="barras">${barras}</div></div>
-    <div class="cartao destaque"><h3>Seu plano de ação</h3>${planoAcao || '<p>Parabéns! Nenhuma ação urgente. Mantenha o plano e revise a cada 6 meses.</p>'}</div>
-    <div class="botoes nao-imprimir">
-      <button class="btn whats" data-acao="whats">💬 Quero implementar com um planejador</button>
-      <button class="btn" data-acao="pdf">📄 PDF do plano</button>
-      ${botaoRelatorio}
+    ${naoGerado ? `<div class="faixa-aviso"><span>As mensalidades de ${fmtComp(comp)} ainda não foram geradas.</span><button class="btn pequeno" onclick="acoes.gerarMesVisivel()">Gerar</button></div>` : ''}
+    <div class="filtros">
+      ${botaoFiltro('todas', 'Todas')}${botaoFiltro('abertas', 'No prazo')}${botaoFiltro('atrasadas', 'Atrasadas')}${botaoFiltro('pagas', 'Pagas')}${botaoFiltro('canceladas', 'Canceladas')}
     </div>
-    <h2>Análise por área</h2>
-    ${dominios}
-    <div class="cartao">
-      <h3>Premissas usadas</h3>
-      <ul class="legal" style="margin:0;padding-left:18px">
-        <li>Rentabilidade real (acima da inflação): ${pct(r.premissas.jurosReal)} ao ano. Todos os valores estão em reais de hoje.</li>
-        <li>Patrimônio da aposentadoria calculado para durar até os ${r.premissas.expectativaVida} anos; para viver só de renda, retirada de ${pct(r.premissas.retiradaSegura)} ao ano.</li>
-        <li>Imposto de renda 2026 com a redução da Lei 15.270/2025; INSS 2026; ITCMD de SC pela Lei 13.136/2004 (demais estados: ${pct(P.sucessao.itcmd.padrao, 0)} estimado). Inventário: advogado ${pct(P.sucessao.honorarios, 0)} e custas ${pct(P.sucessao.custas, 0)}.</li>
-        <li>Tabelas conferidas em ${esc(r.premissas.verificadoEm)}.</li>
-      </ul>
-      <p class="legal" style="margin-top:8px">Este plano é educativo e foi gerado a partir das informações que você forneceu. Não constitui recomendação individual de investimento nem consultoria jurídica ou contábil. Rentabilidades passadas e estimativas não garantem resultados futuros.</p>
-      <p class="legal">${esc(creditos())}</p>
-      <p class="legal">${esc(P.direitos)}</p>
-    </div>
-    <div class="so-relatorio">${anexoDados(pf, r)}</div>`;
+    <div class="lista">${lista.length ? lista.map((m) => itemMensalidade(m)).join('') : '<div class="vazio">Nada por aqui.</div>'}</div>`;
 }
 
-// ---------- Relatório completo (PDF para o cliente) ----------
-
-function capaRelatorio(pf, r) {
-  const a = assessor();
-  const whats = whatsAtendimento();
-  return `<div class="capa">
-    <div class="capa-marca">Planejador Financeiro</div>
-    <h1>Relatório de Planejamento Financeiro</h1>
-    <p class="capa-cliente">${esc(pf.pessoal.nome || 'Cliente')}</p>
-    <p class="sub">Elaborado em ${fmtData(hoje())}</p>
-    <div class="capa-indice">${svgIndice(r.indice)}<div><div class="rotulo">Índice de Saúde Financeira</div><div class="faixa" style="color:${corNota(r.indice)}">${esc(r.faixa)}</div></div></div>
-    <table class="tabela capa-sumario">
-      <tr><td>1. Plano de ação e notas por área</td></tr>
-      <tr><td>2. Análise por área</td></tr>
-      <tr><td>3. Anexo: dados informados pelo cliente</td></tr>
-      <tr><td>4. Declaração e assinaturas</td></tr>
-    </table>
-    <p><b>Atendimento:</b> ${esc(nomeAtendimento())}${nomeAtendimento() === a.nome ? `, ${esc(a.titulo)}` : ''} · WhatsApp ${esc(mostrarWhats(whats))}</p>
-    <p><b>Metodologia:</b> ${esc(P.planejador.nome)}</p>
-    <p class="legal">Documento confidencial: contém dados pessoais e financeiros protegidos pela LGPD (Lei 13.709/2018). Destinado exclusivamente ao cliente identificado acima.</p>
-  </div>`;
-}
-
-function valorCampo(c, v) {
-  if (c.t === 'sim') return v ? 'Sim' : 'Não';
-  if (v === '' || v === null || v === undefined) return '—';
-  if (c.t === 'moeda') return brl(v);
-  if (c.t === 'pct') return `${mostrarNum(v)}% ao mês`;
-  if (c.t === 'sel') { const o = c.op.find(([x]) => String(x) === String(v)); return o ? o[1] : String(v); }
-  return String(v);
-}
-
-function anexoDados(pf, r) {
-  const A = r.agregados;
-  const sobra = A.rendaMensal - A.gastos - A.parcelas;
-  const linha = (rot, val) => `<tr><td>${esc(rot)}</td><td class="num">${esc(val)}</td></tr>`;
-  let html = `<div class="quebra"></div><h2>Anexo: dados informados pelo cliente</h2>
-    <p class="sub">Informações fornecidas por ${esc(pf.pessoal.nome || 'o cliente')} e usadas nos cálculos deste plano. Valores mensais, exceto quando indicado.</p>
-    <div class="cartao"><h3>Resumo financeiro</h3><table class="tabela">
-      ${linha('Renda mensal (líquida + outras)', brl(A.rendaMensal))}
-      ${linha('Gastos mensais', brl(A.gastos))}
-      ${linha('Parcelas de dívidas por mês', brl(A.parcelas))}
-      ${linha('Sobra mensal', brl(sobra))}
-      ${linha('Investe por mês', brl(A.investe))}
-      ${linha('Patrimônio financeiro', brl(A.financeiro))}
-      ${linha('Patrimônio total', brl(A.total))}
-      ${linha('Dívidas', brl(A.totalDividas))}
-      ${linha('Patrimônio líquido', brl(A.liquido))}
-    </table></div>`;
-
-  ETAPAS.forEach((e, i) => {
-    let corpo = '';
-    if (e.perfil) {
-      const resp = pf.suitability.respostas || [];
-      const { perfil: pfInv } = Calc.perfilInvestidor(resp);
-      corpo = `<table class="tabela">${Calc.QUESTOES_PERFIL.map((q, j) => linha(`${j + 1}. ${q.p}`, resp[j] === undefined || resp[j] === null ? '—' : q.o[resp[j]])).join('')}</table>
-        <p style="margin-top:6px"><b>Resultado: perfil ${esc(pfInv || 'não definido')}</b></p>`;
-    } else {
-      const linhas = e.campos.filter((c) => !c.se || c.se(pf)).map((c) => (c.sec
-        ? `<tr><th colspan="2">${esc(c.sec)}</th></tr>`
-        : linha(c.l, valorCampo(c, getPath(pf, c.k))))).join('');
-      if (linhas) corpo += `<table class="tabela">${linhas}</table>`;
-    }
-    if (e.repetidor) {
-      const R = e.repetidor;
-      const itens = getPath(pf, R.k) || [];
-      corpo += `<h3 style="margin-top:10px">${esc(R.titulo)}</h3>`;
-      corpo += itens.length
-        ? `<table class="tabela"><tr>${R.campos.map((c) => `<th>${esc(c.l)}</th>`).join('')}</tr>${itens.map((it) => `<tr>${R.campos.map((c) => `<td>${esc(valorCampo(c, it[c.k]))}</td>`).join('')}</tr>`).join('')}</table>`
-        : '<p class="sub">Nenhum informado.</p>';
-    }
-    html += `<div class="cartao"><h3>${i + 1}. ${esc(e.titulo)}</h3>${corpo}</div>`;
+function telaAtrasados() {
+  const porAluno = new Map();
+  E.mensalidades.filter((m) => situacao(m) === 'atrasada').forEach((m) => {
+    if (!porAluno.has(m.alunoId)) porAluno.set(m.alunoId, []);
+    porAluno.get(m.alunoId).push(m);
   });
+  const grupos = [...porAluno.entries()]
+    .map(([id, ms]) => ({ a: alunoPorId(id), ms: ms.sort((x, y) => x.comp.localeCompare(y.comp)) }))
+    .filter((g) => g.a)
+    .sort((x, y) => diasAtraso(y.ms[0]) - diasAtraso(x.ms[0]));
+  const total = grupos.reduce((s, g) => s + g.ms.reduce((t, m) => t + Number(m.valor), 0), 0);
+  const h = hoje();
 
-  html += `<div class="cartao assinaturas">
-    <h3>Declaração</h3>
-    <p>Declaro que as informações deste relatório foram fornecidas por mim e refletem a minha situação financeira em ${fmtData(hoje())}. Estou ciente de que o plano é educativo, baseado em estimativas, e de que não constitui recomendação individual de investimento.</p>
-    <div class="linhas-assinatura">
-      <div><span></span>${esc(pf.pessoal.nome || 'Cliente')}<br><small>Cliente</small></div>
-      <div><span></span>${esc(nomeAtendimento())}<br><small>Assessor responsável pelo atendimento</small></div>
-    </div>
-    <p class="legal">Local e data: ______________________, ____/____/______</p>
-    <p class="legal">${esc(P.direitos)}</p>
-  </div>`;
-  return html;
-}
-
-function pedirRelatorio() {
-  const pf = perfil();
-  abrirModal(`
-    <h3>Relatório completo</h3>
-    <p>O PDF terá capa, o plano completo, <b>todos os dados informados</b> e a declaração para assinatura.</p>
-    <p class="faixa-aviso">🔒 O documento contém dados pessoais e financeiros de ${esc(pf.pessoal.nome || 'cliente')} (LGPD). Envie apenas para o próprio cliente.</p>
-    <p class="sub">Na tela seguinte, escolha <b>Salvar como PDF</b> e toque em salvar. Depois, envie o arquivo pelo WhatsApp ou e-mail do cliente.</p>
-    <div class="botoes"><button class="btn secundario" data-acao="fechar">Cancelar</button><button class="btn ouro" data-acao="gerar-relatorio">Gerar PDF</button></div>`);
-}
-
-function gerarRelatorio() {
-  const pf = perfil();
-  fecharModal();
-  document.body.classList.add('relatorio');
-  document.title = `Relatorio financeiro completo - ${pf.pessoal.nome || 'cliente'} - ${fmtData(hoje()).replace(/\//g, '-')}`;
-  // No Android a impressão não bloqueia: a limpeza fica para o fim da impressão ou para a próxima tela.
-  window.addEventListener('afterprint', limparRelatorio, { once: true });
-  window.print();
-}
-
-function limparRelatorio() {
-  document.body.classList.remove('relatorio');
-  document.title = 'Planejador Financeiro';
-}
-
-function mensagemWhats(pf, r) {
-  const prior = r.acoes.slice(0, 3).map((a, i) => `${i + 1}. ${a.titulo}`).join('\n');
-  return `Olá, ${primeiroNome(nomeAtendimento())}! Fiz meu planejamento no app Planejador Financeiro e quero ajuda para colocar em prática.\n\n` +
-    `Nome: ${pf.pessoal.nome || ''}\nIdade: ${pf.pessoal.idade || ''}\nEstado: ${pf.pessoal.uf || ''}\n` +
-    `Índice de Saúde Financeira: ${r.indice}/100 (${r.faixa})\n` +
-    (prior ? `\nMinhas prioridades:\n${prior}` : '');
-}
-
-function abrirWhats() {
-  const pf = perfil();
-  const r = Calc.calcular(pf);
-  if (r.incompleto) return;
-  abrirModal(`
-    <h3>Falar com o planejador</h3>
-    <p class="sub">O WhatsApp vai abrir com a mensagem abaixo. Você pode editar o texto. Nada é enviado até você tocar em enviar no WhatsApp.</p>
-    <form class="campos" onsubmit="return false">
-      <textarea id="msg-whats">${esc(mensagemWhats(pf, r))}</textarea>
-      <label class="check"><input type="checkbox" id="ck-lgpd"> Autorizo ${esc(nomeAtendimento())} a usar estas informações para entrar em contato comigo (LGPD).</label>
-    </form>
-    <div class="botoes"><button class="btn secundario" data-acao="fechar">Cancelar</button><button class="btn whats" data-acao="enviar-whats">Abrir WhatsApp</button></div>`);
-}
-
-function imprimirPlano() {
-  const pf = perfil();
-  const antes = document.title;
-  document.title = `Plano financeiro - ${pf.pessoal.nome || 'cliente'} - ${fmtData(hoje()).replace(/\//g, '-')}`;
-  window.print();
-  setTimeout(() => { document.title = antes; }, 1000);
-}
-
-// ---------- Simular ----------
-
-function serieAcumulo(d, idade, jurosReal) {
-  const i = Calc.taxaMensal(jurosReal);
-  const pts = [];
-  for (let a = idade; a <= d.idadeAp; a++) pts.push([a, Calc.vf(d.base, d.aporte, i, (a - idade) * 12)]);
-  return pts;
-}
-
-function graficoSimulacao(atual, novo, idade, rA, rN) {
-  const sA = serieAcumulo(atual, idade, rA);
-  const sN = serieAcumulo(novo, idade, rN);
-  const maxIdade = Math.max(atual.idadeAp, novo.idadeAp, idade + 1);
-  const maxV = Math.max(atual.necessario, novo.necessario, ...sA.map((p) => p[1]), ...sN.map((p) => p[1]), 1) * 1.08;
-  const w = 340, h = 190, mx = 8, my = 14;
-  const x = (a) => mx + ((a - idade) / Math.max(1, maxIdade - idade)) * (w - 2 * mx);
-  const y = (v) => h - 24 - (v / maxV) * (h - 24 - my);
-  const pl = (s) => s.map(([a, v]) => `${x(a).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-  return `<svg class="grafico-sim" viewBox="0 0 ${w} ${h}" role="img" aria-label="Patrimônio projetado até a aposentadoria">
-    <line x1="${mx}" x2="${w - mx}" y1="${h - 24}" y2="${h - 24}" stroke="var(--borda)"/>
-    <line x1="${mx}" x2="${w - mx}" y1="${y(novo.necessario)}" y2="${y(novo.necessario)}" stroke="var(--risco)" stroke-dasharray="5 4"/>
-    <polyline points="${pl(sA)}" fill="none" stroke="var(--suave)" stroke-width="2.5"/>
-    <polyline points="${pl(sN)}" fill="none" stroke="var(--destaque)" stroke-width="3"/>
-    <text x="${mx}" y="${h - 8}">${idade} anos</text><text x="${w - mx}" y="${h - 8}" text-anchor="end">${maxIdade} anos</text>
-    <text x="${w - mx}" y="${y(novo.necessario) - 5}" text-anchor="end">necessário: ${brl0(novo.necessario)}</text>
-  </svg>
-  <div class="legenda"><span><i style="background:var(--suave)"></i>Hoje</span><span><i style="background:var(--destaque)"></i>Simulação</span><span><i style="background:var(--risco)"></i>Meta</span></div>`;
-}
-
-function telaSimular() {
-  if (!estado.config.consentiu) { aba = 'inicio'; return telaInicio(); }
-  const pf = perfil();
-  const base = Calc.calcular(pf);
-  if (base.incompleto) return `<div class="vazio">Preencha primeiro: <b>${base.faltando.map(esc).join(', ')}</b>.</div>`;
-  const ajustes = {
-    jurosReal: sim.jurosReal !== undefined && sim.jurosReal !== '' ? sim.jurosReal / 100 : undefined,
-    idadeAposentadoria: sim.idadeAposentadoria || undefined,
-    aporteExtra: sim.aporteExtra || 0,
-    rendaDesejada: sim.rendaDesejada || undefined,
-  };
-  const novo = Calc.calcular(pf, ajustes);
-  const apA = base.dominios.find((d) => d.id === 'aposentadoria');
-  const apN = novo.dominios.find((d) => d.id === 'aposentadoria');
-  const linha = (rot, a, b) => `<tr><td>${rot}</td><td class="num">${a}</td><td class="num"><b>${b}</b></td></tr>`;
-  const idadeTxt = (v) => (v ? `${v} anos` : 'acima de 85');
   return `
-    <p class="sub">Teste cenários sem mudar os seus dados. Deixe em branco para usar o valor atual.</p>
-    <form class="campos" onsubmit="return false">
-      <div class="linha">
-        <label>Rentabilidade real (% ao ano)<input type="text" inputmode="decimal" data-sim="jurosReal" value="${esc(mostrarNum(sim.jurosReal))}" placeholder="${mostrarNum(P.premissas.jurosReal * 100)}"></label>
-        <label>Idade para se aposentar<input type="text" inputmode="numeric" data-sim="idadeAposentadoria" value="${esc(mostrarNum(sim.idadeAposentadoria))}" placeholder="${apA.dados.idadeAp}"></label>
-      </div>
-      <div class="linha">
-        <label>Aporte extra por mês<input type="text" inputmode="decimal" data-sim="aporteExtra" value="${esc(mostrarNum(sim.aporteExtra))}" placeholder="R$ 0"></label>
-        <label>Renda desejada por mês<input type="text" inputmode="decimal" data-sim="rendaDesejada" value="${esc(mostrarNum(sim.rendaDesejada))}" placeholder="${esc(mostrarNum(Math.round(apA.dados.renda)))}"></label>
-      </div>
-    </form>
-    <div class="cartao" style="margin-top:12px">${graficoSimulacao(apA.dados, apN.dados, Number(pf.pessoal.idade), base.premissas.jurosReal, novo.premissas.jurosReal)}</div>
-    <div class="cartao">
-      <table class="tabela">
-        <tr><th></th><th class="num">Hoje</th><th class="num">Simulação</th></tr>
-        ${linha('Índice de Saúde Financeira', base.indice, novo.indice)}
-        ${linha('Nota da aposentadoria', apA.nota, apN.nota)}
-        ${linha('Aporte mensal', brl0(apA.dados.aporte), brl0(apN.dados.aporte))}
-        ${linha('Patrimônio projetado', brl0(apA.dados.projetado), brl0(apN.dados.projetado))}
-        ${linha('Patrimônio necessário', brl0(apA.dados.necessario), brl0(apN.dados.necessario))}
-        ${linha('Aporte necessário', brl0(apA.dados.aporteNecessario), brl0(apN.dados.aporteNecessario))}
-        ${linha('Aposentadoria possível aos', idadeTxt(apA.dados.idadePossivel), idadeTxt(apN.dados.idadePossivel))}
-      </table>
+    <div class="cartoes">
+      ${cartao('Total em atraso', brl(total), '', total ? 'alerta' : 'ok')}
+      ${cartao('Alunos', String(grupos.length), `tolerância de ${E.config.tolerancia} dia(s)`)}
     </div>
-    <div class="botoes"><button class="btn secundario" data-acao="limpar-sim">Limpar simulação</button></div>`;
+    <div class="lista">
+      ${grupos.length ? grupos.map(({ a, ms }) => {
+        const tot = ms.reduce((s, m) => s + Number(m.valor), 0);
+        const avisos = ms.map((m) => m.ultimoAviso).filter(Boolean).sort();
+        const ultimo = avisos[avisos.length - 1];
+        return `
+        <div class="item">
+          <div class="info clicavel" onclick="acoes.fichaAluno('${a.id}')">
+            <div class="nome">${esc(a.nome)}</div>
+            <div class="detalhe">${ms.map((m) => fmtComp(m.comp)).join(', ')} · <b>${brl(tot)}</b> · ${diasAtraso(ms[0])} dias</div>
+            <div class="detalhe">${ultimo ? (ultimo === h ? '✅ Avisado hoje' : 'Avisado em ' + fmtData(ultimo)) : 'Ainda não avisado'}</div>
+          </div>
+          <div class="acoes">
+            <button class="btn whats pequeno" onclick='enviarWhats("${a.id}","atraso",${JSON.stringify(ms.map((m) => m.id))})'>WhatsApp</button>
+          </div>
+        </div>`;
+      }).join('') : '<div class="vazio">🥋 Ninguém em atraso. Oss!</div>'}
+    </div>
+    <p class="ajuda">Toque no nome para ver a ficha e dar baixa. O botão WhatsApp abre a conversa com a mensagem pronta; você só aperta enviar.</p>`;
 }
 
-// ---------- Ajustes ----------
-
-function telaAjustes() {
-  const pf = perfil();
-  const rev = revisaoPendente(pf);
+function telaAlunos() {
+  const termo = ui.busca.trim().toLowerCase();
+  const sumidos = ui.filtroAlunos === 'sumidos';
+  const lista = E.alunos
+    .filter((a) => (sumidos ? ehSumido(a) : ui.filtroAlunos === 'todos' || (ui.filtroAlunos === 'ativos') === a.ativo))
+    .filter((a) => !termo || a.nome.toLowerCase().includes(termo) || String(a.telefone).includes(termo))
+    .sort((x, y) => (sumidos ? diasSemPagar(y) - diasSemPagar(x) : x.nome.localeCompare(y.nome, 'pt-BR')));
+  const qtdSumidos = E.alunos.filter(ehSumido).length;
+  const botaoFiltro = (k, r) => `<button class="${ui.filtroAlunos === k ? 'ativo' : ''}" onclick="ui.filtroAlunos='${k}';render()">${r}</button>`;
   return `
-    <h2 style="margin-top:4px">Seus dados</h2>
-    <div class="cartao">
-      <p class="sub">Os dados ficam só neste celular. Faça uma cópia de segurança de vez em quando, ou para levar ao planejador.</p>
+    <input class="busca" type="search" placeholder="Buscar por nome ou telefone" value="${esc(ui.busca)}" oninput="ui.busca=this.value;atualizarListaAlunos()">
+    <div class="filtros">${botaoFiltro('ativos', 'Ativos')}${botaoFiltro('sumidos', `Sumidos${qtdSumidos ? ` (${qtdSumidos})` : ''}`)}${botaoFiltro('inativos', 'Inativos')}${botaoFiltro('todos', 'Todos')}</div>
+    ${sumidos ? `<p class="ajuda">Alunos ativos sem nenhum pagamento há ${Number(E.config.diasSumido) || 60} dias ou mais (sem pagamento, conta da matrícula). Abra a ficha para cobrar ou inativar. O prazo muda em Ajustes.</p>` : ''}
+    <div class="lista" id="lista-alunos">${lista.length ? lista.map((a) => {
+      const atr = atrasadasDoAluno(a.id);
+      const saida = saidaAtual(a);
+      const etq = !a.ativo ? `<span class="etiqueta cancelada">Inativo${saida ? ' desde ' + fmtData(saida.data) : ''}</span>`
+        : atr.length ? `<span class="etiqueta atrasada">${atr.length} atrasada(s)</span>` : '<span class="etiqueta paga">Em dia</span>';
+      const ultPag = ultimoPagamento(a.id);
+      const det = sumidos
+        ? `${etq} ${diasSemPagar(a)} dias sem pagar · último: ${ultPag ? fmtData(ultPag) : 'nenhum'}`
+        : `${etq} Dia ${a.diaVenc} · ${brl(a.valor)}`;
+      return `
+        <div class="item clicavel ${a.ativo ? '' : 'inativo'}" onclick="acoes.fichaAluno('${a.id}')">
+          <div class="info">
+            <div class="nome">${esc(a.nome)}</div>
+            <div class="detalhe">${det}</div>
+          </div>
+        </div>`;
+    }).join('') : `<div class="vazio">${sumidos ? 'Nenhum aluno sumido.' : 'Nenhum aluno encontrado.'}</div>`}</div>`;
+}
+
+// Atualiza só a lista ao digitar, para não perder o foco do campo de busca.
+function atualizarListaAlunos() {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = telaAlunos();
+  document.getElementById('lista-alunos').replaceWith(tmp.querySelector('#lista-alunos'));
+}
+
+function telaRelatorios() {
+  const ano = ui.anoRel;
+  const meses = Array.from({ length: 12 }, (_, i) => `${ano}-${pad(i + 1)}`);
+  const pagasAno = recebidoEntre(`${ano}-01-01`, `${ano}-12-31`);
+  const porMes = meses.map((c) => {
+    const ps = pagasAno.filter((m) => compDe(m.dataPag) === c);
+    return { c, n: ps.length, v: ps.reduce((s, m) => s + Number(m.valorPago), 0) };
+  });
+  const max = Math.max(1, ...porMes.map((x) => x.v));
+  const totAno = porMes.reduce((s, x) => s + x.v, 0);
+  const porForma = {};
+  pagasAno.forEach((m) => { porForma[m.forma] = (porForma[m.forma] || 0) + Number(m.valorPago); });
+
+  const comp = compAtual();
+  const doMes = E.mensalidades.filter((m) => m.comp === comp && m.status !== 'cancelada');
+  const prev = doMes.reduce((s, m) => s + Number(m.valor), 0);
+  const atr = doMes.filter((m) => situacao(m) === 'atrasada').reduce((s, m) => s + Number(m.valor), 0);
+  const atrGeral = E.mensalidades.filter((m) => situacao(m) === 'atrasada').reduce((s, m) => s + Number(m.valor), 0);
+
+  // Churn: saídas do mês / alunos ativos no fim do mês anterior.
+  const todasSaidas = E.alunos.flatMap((a) => (a.saidas || []).map((s) => ({ ...s, alunoId: a.id })));
+  const saidasAno = todasSaidas.filter((s) => s.data.startsWith(String(ano)));
+  const churn = meses.filter((c) => c <= comp).map((c) => {
+    const vespera = somarDias(`${c}-01`, -1);
+    const base = E.alunos.filter((a) => ativoEm(a, vespera) === true).length;
+    const entradas = E.alunos.filter((a) => compDe(a.matricula || a.criadoEm) === c).length;
+    const saidas = saidasAno.filter((s) => compDe(s.data) === c).length;
+    return { c, base, entradas, saidas, pct: base ? (saidas / base) * 100 : null };
+  });
+  const porMotivo = {};
+  saidasAno.forEach((s) => { porMotivo[s.motivo] = (porMotivo[s.motivo] || 0) + 1; });
+  const semRegistro = E.alunos.filter((a) => !a.ativo && !(a.saidas || []).length).length;
+  const pctBR = (v) => (v === null ? '-' : v.toFixed(1).replace('.', ',') + '%');
+
+  return `
+    <div class="navmes">
+      <button class="btn secundario pequeno" onclick="ui.anoRel--;render()">◀</button>
+      <strong>Entradas de ${ano}</strong>
+      <button class="btn secundario pequeno" onclick="ui.anoRel++;render()">▶</button>
+    </div>
+    <div class="grafico">${porMes.map((x) => `<div class="col" title="${brl(x.v)}"><div style="height:${(x.v / max) * 100}%"></div><small>${mesCurto(x.c)}</small></div>`).join('')}</div>
+    <table class="tabela">
+      <thead><tr><th>Mês</th><th class="num">Pagtos</th><th class="num">Recebido</th></tr></thead>
+      <tbody>
+        ${porMes.map((x) => `<tr><td>${fmtComp(x.c)}</td><td class="num">${x.n}</td><td class="num">${brl(x.v)}</td></tr>`).join('')}
+        <tr><td><b>Total</b></td><td class="num"><b>${pagasAno.length}</b></td><td class="num"><b>${brl(totAno)}</b></td></tr>
+      </tbody>
+    </table>
+    <p class="ajuda">Regime de caixa: conta pela data em que o pagamento foi recebido.</p>
+
+    <h2>Por forma de pagamento (${ano})</h2>
+    <table class="tabela"><tbody>
+      ${Object.keys(porForma).length ? Object.entries(porForma).sort((x, y) => y[1] - x[1]).map(([f, v]) => `<tr><td>${esc(f)}</td><td class="num">${brl(v)}</td><td class="num">${((v / totAno) * 100).toFixed(1).replace('.', ',')}%</td></tr>`).join('') : '<tr><td>Sem pagamentos.</td></tr>'}
+    </tbody></table>
+
+    <h2>Inadimplência</h2>
+    <table class="tabela"><tbody>
+      <tr><td>Previsto em ${fmtComp(comp)}</td><td class="num">${brl(prev)}</td></tr>
+      <tr><td>Atrasado de ${fmtComp(comp)}</td><td class="num">${brl(atr)}</td></tr>
+      <tr><td>Inadimplência do mês</td><td class="num"><b>${prev ? ((atr / prev) * 100).toFixed(1).replace('.', ',') + '%' : '-'}</b></td></tr>
+      <tr><td>Atraso acumulado (todos os meses)</td><td class="num"><b>${brl(atrGeral)}</b></td></tr>
+    </tbody></table>
+
+    <h2>Entradas e saídas de alunos (${ano})</h2>
+    ${churn.length ? `<table class="tabela">
+      <thead><tr><th>Mês</th><th class="num">Base</th><th class="num">Entraram</th><th class="num">Saíram</th><th class="num">Churn</th></tr></thead>
+      <tbody>
+        ${churn.map((x) => `<tr><td>${fmtComp(x.c)}</td><td class="num">${x.base}</td><td class="num">${x.entradas}</td><td class="num">${x.saidas}</td><td class="num">${pctBR(x.pct)}</td></tr>`).join('')}
+        <tr><td><b>Total</b></td><td class="num"></td><td class="num"><b>${churn.reduce((s, x) => s + x.entradas, 0)}</b></td><td class="num"><b>${saidasAno.length}</b></td><td class="num"></td></tr>
+      </tbody>
+    </table>` : '<div class="vazio">Ano futuro.</div>'}
+    <p class="ajuda">Base = alunos ativos no fim do mês anterior. Churn = saíram no mês ÷ base. Entraram = matrículas no mês.${semRegistro ? ` ${semRegistro} aluno(s) inativado(s) antes desta versão não têm data de saída e ficam fora da conta.` : ''}</p>
+
+    <h2>Motivos de saída (${ano})</h2>
+    <table class="tabela"><tbody>
+      ${saidasAno.length ? Object.entries(porMotivo).sort((x, y) => y[1] - x[1]).map(([m, n]) => `<tr><td>${esc(m)}</td><td class="num">${n}</td><td class="num">${pctBR((n / saidasAno.length) * 100)}</td></tr>`).join('') : '<tr><td>Nenhuma saída registrada.</td></tr>'}
+    </tbody></table>`;
+}
+
+function telaConfig() {
+  const c = E.config;
+  return `
+    <form class="campos cartao" onsubmit="acoes.salvarConfig(event)">
+      <label>Nome da academia<input name="academia" value="${esc(c.academia)}"></label>
+      <div class="linha">
+        <label>Mensalidade padrão (R$)<input name="valorPadrao" inputmode="decimal" value="${numBR(c.valorPadrao)}"></label>
+        <label>Tolerância (dias)<input name="tolerancia" type="number" min="0" max="31" value="${esc(c.tolerancia)}"></label>
+      </div>
+      <label>Considerar "sumido" após (dias sem pagar)<input name="diasSumido" type="number" min="15" max="365" value="${esc(c.diasSumido)}"></label>
+      <label>Chave Pix<input name="pix" value="${esc(c.pix)}" placeholder="CNPJ, e-mail, telefone..."></label>
+      <label>Mensagem de lembrete (antes do vencimento)<textarea name="msgLembrete">${esc(c.msgLembrete)}</textarea></label>
+      <label>Mensagem de atraso<textarea name="msgAtraso">${esc(c.msgAtraso)}</textarea></label>
+      <p class="ajuda">Variáveis: {nome} {nome_completo} {competencia} {valor} {vencimento} {dias} {pix} {academia}</p>
       <div class="botoes">
-        <button class="btn" data-acao="exportar">⬇️ Exportar (.json)</button>
-        <button class="btn secundario" data-acao="importar">⬆️ Importar</button>
+        <button type="button" class="btn secundario" onclick="acoes.restaurarMensagens()">Mensagens padrão</button>
+        <button type="submit" class="btn ok">Salvar</button>
       </div>
-      <input type="file" id="arq-importar" accept=".json,application/json" hidden>
-      ${rev ? `<p class="sub" style="margin-top:10px">Próxima revisão do plano: <b>${fmtData(rev.prox)}</b></p>` : ''}
+    </form>
+
+    <h2>Backup</h2>
+    <div class="cartao">
+      <p class="detalhe" style="margin-top:0">Os dados ficam só neste celular. Faça backup toda semana e guarde o arquivo no Google Drive ou no seu WhatsApp.<br>
+      Último backup: <b>${E.ultimoBackup ? fmtData(E.ultimoBackup) : 'nunca'}</b></p>
+      <div class="botoes">
+        <button class="btn" onclick="acoes.backup()">Fazer backup</button>
+        <button class="btn secundario" onclick="document.getElementById('in-restaurar').click()">Restaurar</button>
+      </div>
+      <input id="in-restaurar" type="file" accept=".json,application/json" hidden onchange="acoes.restaurar(this)">
     </div>
 
-    <h2>Modo Planejador</h2>
+    <h2>Exportar para o financeiro</h2>
     <div class="cartao">
-      <p class="sub">Para uso do planejador em reunião: vários clientes no mesmo aparelho, protegidos por PIN.</p>
-      ${planejador()
-        ? '<button class="btn secundario cheio" data-acao="sair-planejador">Sair do Modo Planejador</button>'
-        : `<button class="btn cheio" data-acao="entrar-planejador">${estado.config.pinHash ? 'Entrar com PIN' : 'Ativar (criar PIN)'}</button>`}
-    </div>
-
-    ${planejador() ? telaAssessor() : ''}
-
-    <h2>Apagar</h2>
-    <div class="cartao">
-      <button class="btn perigo cheio" data-acao="apagar">${planejador() ? 'Apagar este cliente' : 'Apagar todos os meus dados'}</button>
-    </div>
-
-    <h2>Sobre</h2>
-    <div class="cartao legal">
-      <p>Planejador Financeiro ${VERSAO_APP} · tabelas conferidas em ${esc(P.verificadoEm)}.</p>
-      <p>${esc(creditos())}.</p>
-      <p>O plano é educativo e não substitui a recomendação individual de um profissional.</p>
-      <p>${esc(P.direitos)}</p>
-    </div>`;
-}
-
-// Só aparece no Modo Planejador (com PIN), para o cliente não trocar o contato.
-function telaAssessor() {
-  const c = dadosAssessor(licencaValida());
-  const lic = licencaValida();
-  return `
-    <h2>Seus dados de assessor</h2>
-    <div class="cartao">
-      <p class="sub">Aparecem no plano, no PDF e no botão do WhatsApp deste celular. A metodologia continua creditada a ${esc(P.planejador.nome)}.</p>
-      <form class="campos" onsubmit="return false">
-        <label>Nome (definido pela licença)<input type="text" value="${esc(lic.nome)}" disabled></label>
-        <label>Título profissional<input type="text" id="as-titulo" value="${esc(c.titulo || '')}" placeholder="${esc(P.planejador.titulo)}"></label>
-        <label>WhatsApp com DDD<input type="text" inputmode="tel" id="as-whats" value="${esc(mostrarWhats(c.whatsapp))}" placeholder="(49) 99999-9999" autocomplete="tel"></label>
+      <p class="detalhe" style="margin-top:0">CSV no formato da base do financeiro da academia (conta R01). Deixe o mês vazio para exportar tudo.</p>
+      <form class="campos" onsubmit="event.preventDefault();acoes.exportarCSV()">
+        <label>Mês do pagamento<input id="csv-mes" type="month" value="${compAtual()}"></label>
+        <button class="btn" type="submit">Exportar CSV</button>
       </form>
-      <div class="botoes"><button class="btn ouro" data-acao="assessor-salvar">Salvar</button></div>
-      <p class="sub" style="margin-top:8px">${esc(creditos())}</p>
     </div>
-    <h2>Licença</h2>
+
+    <h2>Importar alunos</h2>
     <div class="cartao">
-      <p>🔑 <b>${esc(lic.nome)}</b> · ${fmtValidade(lic)}</p>
-      <button class="btn secundario cheio" data-acao="trocar-licenca">Inserir novo código (renovação)</button>
-    </div>`;
+      <p class="detalhe" style="margin-top:0">Arquivo CSV com uma linha por aluno: <code>nome;telefone;dia_vencimento;valor;observacao</code> (pode ser editado no Excel). Nomes já cadastrados são ignorados.</p>
+      <button class="btn secundario cheio" onclick="document.getElementById('in-importar').click()">Escolher arquivo</button>
+      <input id="in-importar" type="file" accept=".csv,text/csv,text/plain" hidden onchange="acoes.importarAlunos(this)">
+    </div>
+
+    <h2>Zona de perigo</h2>
+    <button class="btn perigo cheio" onclick="acoes.apagarTudo()">Apagar todos os dados</button>
+    <p class="ajuda">Mensalidades da Academia · v5 · dados locais (IndexedDB)</p>`;
 }
 
-async function salvarAssessor() {
-  const titulo = document.getElementById('as-titulo').value.trim();
-  const whats = normalizarWhats(document.getElementById('as-whats').value);
-  if (whats === null) return avisar('WhatsApp inválido. Use DDD + número, ex.: (49) 99999-9999.');
-  estado.config.assessor = { dono: licencaValida().nome, titulo, whatsapp: whats };
-  await salvar();
-  render();
-  avisar('Dados do assessor salvos.');
+// ===================== Navegação =====================
+
+const TELAS = {
+  painel: ['Painel', telaPainel],
+  mes: ['Mensalidades', telaMes],
+  atrasados: ['Atrasados', telaAtrasados],
+  alunos: ['Alunos', telaAlunos],
+  relatorios: ['Relatórios', telaRelatorios],
+  config: ['Ajustes', telaConfig],
+};
+
+function render() {
+  const [titulo, fn] = TELAS[ui.aba];
+  document.getElementById('titulo').textContent = titulo;
+  document.getElementById('conteudo').innerHTML = fn();
+  document.querySelectorAll('.abas button').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === ui.aba));
+  const alunosAtraso = new Set(E.mensalidades.filter((m) => situacao(m) === 'atrasada').map((m) => m.alunoId)).size;
+  const badge = document.getElementById('badge-atrasos');
+  badge.hidden = !alunosAtraso;
+  badge.textContent = alunosAtraso;
 }
 
-function pedirCodigo(motivo = '') {
-  abrirModal(`
-    <h3>Código de ativação</h3>
-    ${motivo ? `<p class="faixa-aviso">${esc(motivo)}</p>` : ''}
-    <p class="sub">O Modo Planejador é licenciado por ${esc(P.planejador.nome)}. Cole o código que você recebeu.</p>
-    <form class="campos" onsubmit="return false">
-      <textarea id="codigo-licenca" placeholder="PF1...." style="min-height:110px;font-family:monospace;font-size:0.8rem"></textarea>
-    </form>
-    <div class="botoes"><button class="btn secundario" data-acao="fechar">Cancelar</button><button class="btn ouro" data-acao="confirmar-codigo">Ativar</button></div>
-    <p class="legal" style="margin-top:10px">Não tem código? Fale com ${esc(P.planejador.nome)}: <a href="https://wa.me/${P.planejador.whatsapp}" target="_blank" rel="noopener">WhatsApp</a>.</p>`);
-}
-
-async function confirmarCodigo() {
-  const lic = await verificarCodigo(document.getElementById('codigo-licenca').value);
-  if (!lic) return avisar('Código inválido. Confira se copiou o código inteiro.');
-  if (hoje() > lic.validade) return avisar(`Este código venceu em ${fmtData(lic.validade)}.`);
-  const anterior = estado.config.licenca;
-  if (anterior && anterior.nome !== lic.nome && estado.perfis.some((p) => Object.keys(p.etapasFeitas).length)) {
-    if (!confirm(`Este código é de ${lic.nome}, e este celular estava licenciado para ${anterior.nome}. Continuar?`)) return;
-  }
-  estado.config.licenca = lic;
-  await salvar();
-  fecharModal();
-  avisar(`Licença ativada: ${lic.nome}, ${fmtValidade(lic)}.`);
-  if (!planejador()) pedirPin(); else render();
-}
-
-// Licença vencida ou removida: sai do Modo Planejador (os dados continuam guardados).
-function conferirLicenca() {
-  if (planejador() && !licencaValida()) {
-    estado.config.modoPlanejador = false;
-    salvar();
-    const lic = estado.config.licenca;
-    avisar(lic ? `Licença vencida em ${fmtData(lic.validade)}. Fale com ${P.planejador.nome} para renovar.` : 'Modo Planejador exige licença.');
-    return false;
-  }
-  return true;
-}
-
-function exportar() {
-  const dados = planejador()
-    ? { tipo: 'planejador-financeiro', versao: 1, exportadoEm: hoje(), perfis: estado.perfis }
-    : { tipo: 'planejador-financeiro', versao: 1, exportadoEm: hoje(), perfis: [perfil()] };
-  const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  const nome = planejador() ? 'clientes' : (primeiroNome(perfil().pessoal.nome) || 'meu-plano').toLowerCase();
-  a.href = URL.createObjectURL(blob);
-  a.download = `planejamento-${nome}-${hoje()}.json`;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
-  estado.config.ultimoBackup = hoje();
-  salvar();
-  if (aba === 'inicio') render();
-  avisar('Backup salvo em Downloads. Envie para o Google Drive ou para o seu WhatsApp.');
-}
-
-function normalizarPerfil(p) {
-  const base = novoPerfil();
-  const out = { ...base, ...p };
-  for (const k of ['pessoal', 'renda', 'despesas', 'patrimonio', 'protecao', 'aposentadoria', 'suitability', 'tributario', 'sucessao']) out[k] = { ...base[k], ...(p[k] || {}) };
-  for (const k of ['dividas', 'objetivos', 'historico']) out[k] = Array.isArray(p[k]) ? p[k] : [];
-  out.pessoal.dependentes = Array.isArray(out.pessoal.dependentes) ? out.pessoal.dependentes : [];
-  out.etapasFeitas = p.etapasFeitas || {};
-  out.id = p.id || uid();
-  return out;
-}
-
-async function importar(arquivo) {
-  try {
-    const dados = JSON.parse(await arquivo.text());
-    const lista = dados.tipo === 'planejador-financeiro' ? dados.perfis : dados.pessoal ? [dados] : null;
-    if (!Array.isArray(lista) || !lista.length) throw new Error('arquivo não é deste app');
-    const perfis = lista.map(normalizarPerfil);
-    if (planejador()) {
-      for (const p of perfis) {
-        const i = estado.perfis.findIndex((x) => x.id === p.id);
-        if (i >= 0) estado.perfis[i] = p; else estado.perfis.push(p);
-      }
-      estado.ativoId = perfis[0].id;
-      avisar(`${perfis.length} cliente(s) importado(s).`);
-    } else {
-      if (!confirm('Importar vai substituir os dados atuais deste celular. Continuar?')) return;
-      estado.perfis = [perfis[0]];
-      estado.ativoId = perfis[0].id;
-      avisar('Dados importados.');
-    }
-    await salvar();
-    render();
-  } catch (e) {
-    avisar('Não foi possível importar: ' + e.message);
-  }
-}
-
-function pedirPin() {
-  const criando = !estado.config.pinHash;
-  abrirModal(`
-    <h3>${criando ? 'Criar PIN do Modo Planejador' : 'PIN do Modo Planejador'}</h3>
-    <form class="campos" onsubmit="return false">
-      <label>PIN (4 a 8 números)<input type="password" inputmode="numeric" id="pin" maxlength="8" autocomplete="off"></label>
-      ${criando ? '<label>Repita o PIN<input type="password" inputmode="numeric" id="pin2" maxlength="8" autocomplete="off"></label>' : ''}
-    </form>
-    <div class="botoes"><button class="btn secundario" data-acao="fechar">Cancelar</button><button class="btn ouro" data-acao="confirmar-pin">Entrar</button></div>`);
-}
-
-async function confirmarPin() {
-  const pin = document.getElementById('pin').value.trim();
-  if (!/^\d{4,8}$/.test(pin)) return avisar('O PIN deve ter de 4 a 8 números.');
-  const h = await hashPin(pin);
-  if (!estado.config.pinHash) {
-    if (pin !== document.getElementById('pin2').value.trim()) return avisar('Os PINs não conferem.');
-    estado.config.pinHash = h;
-  } else if (h !== estado.config.pinHash) {
-    return avisar('PIN incorreto.');
-  }
-  estado.config.modoPlanejador = true;
-  await salvar();
-  fecharModal();
-  aba = 'inicio';
-  render();
-}
-
-async function apagar() {
-  if (planejador()) {
-    const pf = perfil();
-    if (!confirm(`Apagar o cliente "${pf.pessoal.nome || 'sem nome'}" deste aparelho?`)) return;
-    estado.perfis = estado.perfis.filter((p) => p.id !== pf.id);
-    if (!estado.perfis.length) estado.perfis.push(novoPerfil());
-    estado.ativoId = estado.perfis[0].id;
-  } else {
-    if (!confirm('Apagar todos os seus dados deste celular? Não dá para desfazer.')) return;
-    const cfg = estado.config;
-    estado = estadoInicial();
-    estado.config.pinHash = cfg.pinHash;
-    estado.config.assessor = cfg.assessor || {};
-    estado.config.licenca = cfg.licenca;
-  }
-  await salvar();
-  irPara('inicio');
-}
-
-// ===================== Eventos =====================
-
-document.addEventListener('click', async (ev) => {
-  const abaBtn = ev.target.closest('.abas button');
-  if (abaBtn) return irPara(abaBtn.dataset.aba);
-  const el = ev.target.closest('[data-acao]');
-  if (!el) return;
-  const pf = perfil();
-  switch (el.dataset.acao) {
-    case 'ir': return irPara(el.dataset.aba);
-    case 'consentir':
-      if (!document.getElementById('ck-consente').checked) return avisar('Marque "Li e entendi" para começar.');
-      estado.config.consentiu = true;
-      await salvar();
-      return irPara('dados');
-    case 'etapa': etapaAberta = el.dataset.id; return render();
-    case 'voltar-etapas': etapaAberta = null; return render();
-    case 'concluir-etapa': {
-      pf.etapasFeitas[el.dataset.id] = true;
-      pf.atualizadoEm = hoje();
-      await salvar();
-      const idx = ETAPAS.findIndex((e) => e.id === el.dataset.id);
-      if (idx < ETAPAS.length - 1) { etapaAberta = ETAPAS[idx + 1].id; return render(); }
-      return irPara('plano');
-    }
-    case 'rep-add': {
-      const R = ETAPAS.find((e) => e.id === el.dataset.id).repetidor;
-      const lista = getPath(pf, R.k) || [];
-      lista.push(R.novo());
-      setPath(pf, R.k, lista);
-      await salvar();
-      return render();
-    }
-    case 'rep-remover': {
-      const lista = getPath(pf, el.dataset.k) || [];
-      lista.splice(Number(el.dataset.i), 1);
-      await salvar();
-      return render();
-    }
-    case 'whats': return abrirWhats();
-    case 'enviar-whats': {
-      if (!document.getElementById('ck-lgpd').checked) return avisar('Marque a autorização para continuar.');
-      const msg = document.getElementById('msg-whats').value;
-      window.open(`https://wa.me/${whatsAtendimento()}?text=${encodeURIComponent(msg)}`, '_blank');
-      return fecharModal();
-    }
-    case 'pdf': return imprimirPlano();
-    case 'relatorio': return pedirRelatorio();
-    case 'gerar-relatorio': return gerarRelatorio();
-    case 'fechar': return fecharModal();
-    case 'limpar-sim': sim = {}; return render();
-    case 'exportar': return exportar();
-    case 'importar': return document.getElementById('arq-importar').click();
-    case 'entrar-planejador': {
-      if (licencaValida()) return pedirPin();
-      const lic = estado.config.licenca;
-      return pedirCodigo(lic ? `A licença de ${lic.nome} venceu em ${fmtData(lic.validade)}. Insira o código de renovação.` : '');
-    }
-    case 'confirmar-pin': return confirmarPin();
-    case 'sair-planejador':
-      estado.config.modoPlanejador = false;
-      await salvar();
-      return irPara('inicio');
-    case 'novo-cliente': {
-      const p = novoPerfil();
-      estado.perfis.push(p);
-      estado.ativoId = p.id;
-      await salvar();
-      etapaAberta = 'sobre';
-      aba = 'dados';
-      return render();
-    }
-    case 'ativar':
-      estado.ativoId = el.dataset.id;
-      sim = {};
-      await salvar();
-      return irPara('dados');
-    case 'apagar': return apagar();
-    case 'assessor-salvar': return salvarAssessor();
-    case 'confirmar-codigo': return confirmarCodigo();
-    case 'trocar-licenca': return pedirCodigo();
-    case 'instalar':
-      if (!pedidoInstalar) return avisar('No Chrome, toque no menu ⋮ e em "Instalar app".');
-      pedidoInstalar.prompt();
-      await pedidoInstalar.userChoice;
-      pedidoInstalar = null;
-      return render();
-  }
+document.querySelectorAll('.abas button').forEach((b) => {
+  b.addEventListener('click', () => { ui.aba = b.dataset.aba; window.scrollTo(0, 0); render(); });
 });
+document.getElementById('btn-novo-aluno').addEventListener('click', () => acoes.formAluno());
 
-document.addEventListener('change', async (ev) => {
-  const el = ev.target;
-  if (el.id === 'arq-importar' && el.files[0]) { await importar(el.files[0]); el.value = ''; return; }
-  if (el.dataset.sim) { sim[el.dataset.sim] = lerValor(el.value); return render(); }
-  if (!el.dataset.k) return;
-  const pf = perfil();
-  const val = el.type === 'radio' ? Number(el.value) : lerCampo(el);
-  setPath(pf, el.dataset.k, val);
-  pf.atualizadoEm = hoje();
-  if (el.dataset.t !== 'texto' && el.dataset.t !== 'sel' && el.dataset.t !== 'sim' && el.type !== 'radio') el.value = mostrarNum(val);
-  if (el.dataset.k === 'pessoal.nome' && planejador()) document.getElementById('cliente-ativo').textContent = val || 'Cliente sem nome';
-  await salvar();
-  if (el.dataset.re) render();
+// Ao voltar para o app (ex.: depois do WhatsApp), recalcula datas e gera meses novos.
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') return;
+  if (gerarPendentes()) await persistir();
+  if (!modal.open) render();
 });
-
-// O Chrome avisa quando o app pode ser instalado; guardamos o aviso para o botão "Instalar".
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  pedidoInstalar = e;
-  if (estado && aba === 'inicio') render();
-});
-window.addEventListener('appinstalled', () => { pedidoInstalar = null; avisar('App instalado! Procure o ícone na tela inicial.'); });
-
-// ===================== Início =====================
 
 async function iniciar() {
   try {
     const salvo = await carregarEstado();
-    estado = salvo || estadoInicial();
-    estado.perfis = (estado.perfis || []).map(normalizarPerfil);
-    if (!estado.perfis.length) estado.perfis.push(novoPerfil());
-    if (!estado.perfis.some((p) => p.id === estado.ativoId)) estado.ativoId = estado.perfis[0].id;
-    estado.config = { consentiu: false, modoPlanejador: false, pinHash: '', ...(estado.config || {}) };
-    // Relê a licença de dentro do código assinado: nome e validade editados à mão são desfeitos.
-    if (estado.config.licenca) estado.config.licenca = await verificarCodigo(estado.config.licenca.codigo);
+    if (salvo) E = { ...estadoInicial(), ...salvo, config: { ...estadoInicial().config, ...salvo.config } };
   } catch (e) {
-    estado = estadoInicial();
-    avisar('Armazenamento indisponível: os dados não serão salvos.');
+    avisar('Erro ao abrir os dados: ' + e.message);
   }
-  conferirLicenca();
-  pedirArmazenamentoPersistente();
+  if (gerarPendentes()) await persistir();
+  else if (!E.config.ultimaCompGerada) await persistir();
   render();
+  pedirArmazenamentoPersistente();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 

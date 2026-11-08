@@ -1,8 +1,7 @@
-// © 2026 Michel Ebertz. Todos os direitos reservados. Proibido copiar, reproduzir, modificar ou distribuir sem autorização por escrito (Leis 9.610/1998 e 9.609/1998).
 // Guarda os arquivos do app no celular para abrir sem internet.
 // Ao mudar qualquer arquivo do app, aumente a VERSAO para os celulares baixarem a nova.
-const VERSAO = 'pf-v5';
-const ARQUIVOS = ['./', 'index.html', 'styles.css', 'parametros.js', 'calc.js', 'db.js', 'app.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
+const VERSAO = 'v5';
+const ARQUIVOS = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 // 'reload' baixa direto do servidor, sem usar cópias antigas do navegador.
 self.addEventListener('install', (e) => {
@@ -22,6 +21,7 @@ self.addEventListener('activate', (e) => {
 });
 
 // Primeiro tenta a rede (pega atualizações); sem internet, usa a cópia guardada.
+// 'no-cache' faz o navegador sempre conferir com o servidor se há versão nova.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
